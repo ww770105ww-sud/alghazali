@@ -109,31 +109,33 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_account_from_entity' && i
     exit;
 }
 
+if (isset($_GET['posted']) && $_GET['posted'] === '1' && empty($_GET['status'])) {
+    $_GET['status'] = 'posted';
+}
+
 // فلترة الفواتير (نقلها للأعلى ليتم استخدامها في الاستعلام الرئيسي قبل Header)
+/*
 $where = "WHERE 1=1";
 $params = [];
 
 if (!empty($_GET['from_date'])) {
-    $where .= " AND invoice_date >= ?";
-    $params[] = normalize_date_filter_start($_GET['from_date']);
+    $where .= " AND i.invoice_date >= ?";
+    $params[] = $_GET['from_date'] . ' 00:00:00';
 }
 if (!empty($_GET['to_date'])) {
-    $where .= " AND invoice_date <= ?";
-    $params[] = normalize_date_filter_end($_GET['to_date']);
+    $where .= " AND i.invoice_date <= ?";
+    $params[] = $_GET['to_date'] . ' 23:59:59';
 }
 if (!empty($_GET['invoice_category'])) {
-    $where .= " AND invoice_category = ?";
+    $where .= " AND i.invoice_category = ?";
     $params[] = $_GET['invoice_category'];
 }
-if (isset($_GET['posted']) && $_GET['posted'] === '1' && empty($_GET['status'])) {
-    $_GET['status'] = 'posted';
-}
 if (!empty($_GET['branch_id'])) {
-    $where .= " AND branch_id = ?";
+    $where .= " AND i.branch_id = ?";
     $params[] = $_GET['branch_id'];
 }
 if (!empty($_GET['currency_filter'])) {
-    $where .= " AND currency_id = ?";
+    $where .= " AND i.currency_id = ?";
     $params[] = $_GET['currency_filter'];
 }
 if (!empty($_GET['status'])) {
@@ -146,12 +148,14 @@ if (!empty($_GET['q'])) {
     $params[] = $search;
     $params[] = $search;
 }
+*/
 
 // جلب إعدادات الترقيم العامة للاستعلام
 $def_s_pref = $settings['sales_invoice_prefix'] ?? 'SAL-';
 $def_p_pref = $settings['purchase_invoice_prefix'] ?? 'PUR-';
 
 // تجهيز الاستعلام الرئيسي لدمج الفواتير بطريقة ذكية
+/*
 $query = "SELECT
             -- بيانات فاتورة البيع
             CASE WHEN i.invoice_category = 'sales' THEN i.id ELSE NULL END as sales_id,
@@ -306,6 +310,7 @@ $query = "SELECT
               ))
           )
           ORDER BY i.invoice_date DESC, i.id DESC";
+*/
 
 // جلب بيانات الموردين مع أكواد حساباتهم مسبقاً بشكل هرمي
 // جلب معرف الأب للموردين (21101)
@@ -437,21 +442,15 @@ foreach ($services as $s) {
     ];
 }
 
-try {
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
-    $invoices = $stmt->fetchAll();
-} catch (PDOException $e) {
-    if (strpos($e->getMessage(), 'invoices') !== false) {
-        $invoices = [];
-    } else {
-        throw $e;
-    }
-}
-
 // دالة لجلب اسم الطرف
-function getPartyName($pdo, $inv)
+function getPartyName($pdo, $inv, $party_name_maps = null)
 {
+    $party_name_maps = $party_name_maps ?: [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
     $category = $inv['invoice_category'] ?? null;
     $supplier_id = $inv['supplier_id'] ?? null;
     $account_id = $inv['account_id'] ?? null;
@@ -460,16 +459,22 @@ function getPartyName($pdo, $inv)
 
     // للأمان: إذا كان هناك عميل أو وكيل محدد، نعرض اسمه أولاً
     if (!empty($customer_id)) {
-        $stmt = $pdo->prepare("SELECT full_name as name FROM customers WHERE id = ?");
-        $stmt->execute([$customer_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['customers'][(int)$customer_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT full_name as name FROM customers WHERE id = ?");
+            $stmt->execute([$customer_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "عميل: " . $name;
         }
     } elseif (!empty($agent_id)) {
-        $stmt = $pdo->prepare("SELECT agent_name as name FROM agents WHERE id = ?");
-        $stmt->execute([$agent_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['agents'][(int)$agent_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT agent_name as name FROM agents WHERE id = ?");
+            $stmt->execute([$agent_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "وكيل: " . $name;
         }
@@ -477,9 +482,12 @@ function getPartyName($pdo, $inv)
 
     // إذا لم يوجد عميل/وكيل، نتحقق من نوع الفاتورة
     if ($category == 'purchase' && !empty($supplier_id)) {
-        $stmt = $pdo->prepare("SELECT supplier_name as name FROM suppliers WHERE id = ?");
-        $stmt->execute([$supplier_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['suppliers'][(int)$supplier_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT supplier_name as name FROM suppliers WHERE id = ?");
+            $stmt->execute([$supplier_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "مورد: " . $name;
         }
@@ -487,15 +495,68 @@ function getPartyName($pdo, $inv)
 
     // إذا لم يوجد أي من الأطراف القديمة، نحاول جلب من unified_accounts باستخدام account_id
     if (!empty($account_id)) {
-        $stmt = $pdo->prepare("SELECT account_name_ar as name FROM unified_accounts WHERE id = ?");
-        $stmt->execute([$account_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['accounts'][(int)$account_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT account_name_ar as name FROM unified_accounts WHERE id = ?");
+            $stmt->execute([$account_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return $name;
         }
     }
 
     return "فاتورة عامة";
+}
+
+function getPartyNameMaps($pdo, $invoices)
+{
+    $ids = [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
+
+    foreach ($invoices as $invoice) {
+        foreach ([
+            'customers' => $invoice['customer_id'] ?? null,
+            'agents' => $invoice['agent_id'] ?? null,
+            'suppliers' => $invoice['supplier_id'] ?? null,
+            'accounts' => $invoice['account_id'] ?? null,
+        ] as $type => $id) {
+            if ($id !== null && $id !== '') {
+                $ids[$type][(int)$id] = true;
+            }
+        }
+    }
+
+    $maps = [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
+    $queries = [
+        'customers' => 'SELECT id, full_name AS name FROM customers WHERE id IN (%s)',
+        'agents' => 'SELECT id, agent_name AS name FROM agents WHERE id IN (%s)',
+        'suppliers' => 'SELECT id, supplier_name AS name FROM suppliers WHERE id IN (%s)',
+        'accounts' => 'SELECT id, account_name_ar AS name FROM unified_accounts WHERE id IN (%s)',
+    ];
+
+    foreach ($queries as $type => $sql) {
+        if (empty($ids[$type])) {
+            continue;
+        }
+        $placeholders = implode(', ', array_fill(0, count($ids[$type]), '?'));
+        $stmt = $pdo->prepare(sprintf($sql, $placeholders));
+        $stmt->execute(array_keys($ids[$type]));
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $maps[$type][(int)$row['id']] = $row['name'];
+        }
+    }
+
+    return $maps;
 }
 
 function resolveInvoicePartyAccounts($pdo, $delivery_type, $account_id, $customer_id = null, $agent_id = null, $supplier_id = null)
@@ -1662,23 +1723,23 @@ $where = "WHERE 1=1";
 $params = [];
 
 if (!empty($_GET['from_date'])) {
-    $where .= " AND invoice_date >= ?";
-    $params[] = normalize_date_filter_start($_GET['from_date']);
+    $where .= " AND i.invoice_date >= ?";
+    $params[] = $_GET['from_date'] . ' 00:00:00';
 }
 if (!empty($_GET['to_date'])) {
-    $where .= " AND invoice_date <= ?";
-    $params[] = normalize_date_filter_end($_GET['to_date']);
+    $where .= " AND i.invoice_date <= ?";
+    $params[] = $_GET['to_date'] . ' 23:59:59';
 }
 if (!empty($_GET['invoice_category'])) {
-    $where .= " AND invoice_category = ?";
+    $where .= " AND i.invoice_category = ?";
     $params[] = $_GET['invoice_category'];
 }
 if (!empty($_GET['branch_id'])) {
-    $where .= " AND branch_id = ?";
+    $where .= " AND i.branch_id = ?";
     $params[] = $_GET['branch_id'];
 }
 if (!empty($_GET['currency_filter'])) {
-    $where .= " AND currency_id = ?";
+    $where .= " AND i.currency_id = ?";
     $params[] = $_GET['currency_filter'];
 }
 if (!empty($_GET['status'])) {
@@ -1892,9 +1953,36 @@ if ($exchange_loss_id) {
 
 $services = $pdo->query("SELECT id, service_name FROM services WHERE status = 'active' ORDER BY service_name ASC")->fetchAll();
 
+$allowed_per_page = [5, 25, 50, 100, 200];
+$per_page = (int)($_GET['per_page'] ?? 50);
+if (!in_array($per_page, $allowed_per_page, true)) {
+    $per_page = 50;
+}
+$page = max(1, (int)($_GET['page'] ?? 1));
+$total_invoices = 0;
+$total_pages = 1;
+
 try {
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
+    $count_query = preg_replace(
+        '/\s+ORDER BY i\.invoice_date DESC, i\.id DESC;?\s*$/',
+        '',
+        $query
+    );
+    $count_stmt = $pdo->prepare("SELECT COUNT(*) FROM ({$count_query}) AS invoice_rows");
+    $count_stmt->execute($params);
+    $total_invoices = (int)$count_stmt->fetchColumn();
+    $total_pages = max(1, (int)ceil($total_invoices / $per_page));
+    $page = min($page, $total_pages);
+    $offset = ($page - 1) * $per_page;
+
+    $paged_query = rtrim($query, " ;\r\n") . " LIMIT ? OFFSET ?";
+    $stmt = $pdo->prepare($paged_query);
+    foreach ($params as $index => $param) {
+        $stmt->bindValue($index + 1, $param);
+    }
+    $stmt->bindValue(count($params) + 1, $per_page, PDO::PARAM_INT);
+    $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
     $invoices = $stmt->fetchAll();
 } catch (PDOException $e) {
     if (strpos($e->getMessage(), 'invoices') !== false) {
@@ -1907,6 +1995,9 @@ try {
         throw $e;
     }
 }
+$party_name_maps = getPartyNameMaps($pdo, $invoices);
+$pagination_query = $_GET;
+$pagination_query['per_page'] = $per_page;
 ?>
 
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -2574,8 +2665,8 @@ try {
                                 <span class="badge-apple bg-primary-subtle text-primary"><?php echo htmlspecialchars($service_name); ?></span>
                             </td>
                             <td>
-                                <?php $cust_name = getPartyName($pdo, $inv); ?>
-                                <div class="fw-bold small"><?php echo $cust_name; ?></div>
+                                <?php $cust_name = getPartyName($pdo, $inv, $party_name_maps); ?>
+                                <div class="fw-bold small"><?php echo h($cust_name); ?></div>
                                 <?php if (!$is_purchase_only && $inv['sales_status'] == 'posted'):
                                     $s_total = round((float)$inv['sales_amount'] - (float)$inv['sales_discount'], 2);
                                     $s_received = round((float)$inv['sales_received'], 2);
@@ -2862,7 +2953,41 @@ try {
     </div>
 </div>
 
-<!-- مودال تعديل الفاتورة -->
+<?php
+$pagination_url = function ($target_page) use ($pagination_query) {
+    $query = $pagination_query;
+    $query['page'] = $target_page;
+    return 'invoices.php?' . http_build_query($query);
+};
+$pager_start = max(1, $page - 2);
+$pager_end = min($total_pages, $page + 2);
+?>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-4" dir="rtl">
+    <div class="text-muted small">
+        إجمالي الفواتير: <?php echo h(number_format($total_invoices)); ?>
+        <span class="mx-1">·</span>
+        الصفحة <?php echo h($page); ?> من <?php echo h($total_pages); ?>
+    </div>
+    <?php if ($total_pages > 1): ?>
+        <nav aria-label="صفحات الفواتير">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="<?php echo h($pagination_url(max(1, $page - 1))); ?>">السابق</a>
+                </li>
+                <?php for ($pager_page = $pager_start; $pager_page <= $pager_end; $pager_page++): ?>
+                    <li class="page-item <?php echo $pager_page === $page ? 'active' : ''; ?>">
+                        <a class="page-link" href="<?php echo h($pagination_url($pager_page)); ?>"><?php echo h($pager_page); ?></a>
+                    </li>
+                <?php endfor; ?>
+                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="<?php echo h($pagination_url(min($total_pages, $page + 1))); ?>">التالي</a>
+                </li>
+            </ul>
+        </nav>
+    <?php endif; ?>
+</div>
+
+<div class="modal fade" id="editInvoiceModal" tabindex="-1">
 <div class="modal fade" id="editInvoiceModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
