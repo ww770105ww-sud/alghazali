@@ -3,8 +3,15 @@ require_once '../../includes/db.php';
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once '../../includes/functions.php';
+require_once '../../includes/accounting_functions.php';
 
 header('Content-Type: application/json');
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'message' => 'طريقة الطلب غير مدعومة.']);
+    exit;
+}
 
 if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
     echo json_encode(['success' => false, 'message' => 'خطأ في التحقق من الطلب (CSRF).']);
@@ -38,27 +45,27 @@ try {
         throw new Exception("السند ليس في حالة ترحيل.");
     }
 
-    // 2. عكس الأرصدة قبل الحذف (تعريف القيد المعاكس وتحديث الأرصدة)
-    $pdo->prepare("UPDATE journal_lines SET debit = -debit, credit = -credit WHERE financial_transaction_id = ?")->execute([$id]);
-    $pdo->prepare("CALL sp_update_account_balances(?)")->execute([$id]);
+    if (!balances_triggers_enabled($pdo)) {
+        apply_transaction_balances($pdo, (int)$id, -1);
+    }
 
-    // 3. حذف سطور القيد المحاسبي
+    // 2. حذف سطور القيد فقط، والـ triggers ستعكس الأرصدة تلقائياً.
     $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$id]);
 
-    // 4. تحديث حالة السند إلى مسودة
+    // 3. تحديث حالة السند إلى مسودة
     $stmt_reset = $pdo->prepare("UPDATE financial_transactions SET status = 'draft', posted_at = NULL, posted_by = NULL WHERE id = ?");
     $stmt_reset->execute([$id]);
 
-    // 5. إعادة حساب مبالغ الفواتير المرتبطة (لأن التوزيعات ما زالت موجودة ولكن السند لم يعد مرحلاً)
+    // 4. إعادة حساب مبالغ الفواتير المرتبطة (لأن التوزيعات ما زالت موجودة ولكن السند لم يعد مرحلاً)
     $stmt_allocs = $pdo->prepare("SELECT DISTINCT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
     $stmt_allocs->execute([$id]);
     $invoice_ids = $stmt_allocs->fetchAll(PDO::FETCH_COLUMN);
 
     foreach ($invoice_ids as $inv_id) {
-        $pdo->prepare("CALL sp_recalculate_invoice_payment(?)")->execute([$inv_id]);
+        php_recalculate_invoice_payment($pdo, $inv_id);
     }
 
-    // 6. تسجيل في audit_log
+    // 5. تسجيل في audit_log
     $stmt_after = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
     $stmt_after->execute([$id]);
     $voucher_after = $stmt_after->fetch(PDO::FETCH_ASSOC);

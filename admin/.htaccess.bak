@@ -1,0 +1,118 @@
+# ghazali Admin Panel - .htaccess
+# Optimized for localhost and InfinityFree
+
+# Enable Rewrite Engine
+RewriteEngine On
+RewriteBase /ghazali/admin/
+
+# Handle admin base URL - redirect to index.php
+DirectoryIndex index.php
+
+# Pretty URLs - Remove .php extension
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^([^\.]+)$ $1.php [NC,L]
+
+# Security Headers
+<IfModule mod_headers.c>
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-XSS-Protection "1; mode=block"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+    Header set Permissions-Policy "geolocation=(self), microphone=(self), camera=(self)"
+</IfModule>
+
+# Prevent access to sensitive files
+<FilesMatch "\.(env|log|ini|sql|md|json|sh|bat|zip)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Protect configuration files
+<FilesMatch "^(db|functions|accounting_functions)\.php$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Block legacy maintenance pages from direct web access
+<IfModule mod_authz_core.c>
+    <FilesMatch "^(fix.*|check.*|debug.*|simple_fix)\.php$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^(fix.*|check.*|debug.*|simple_fix)\.php$">
+        Order Allow,Deny
+        Deny from all
+    </FilesMatch>
+</IfModule>
+
+# Prevent directory listing
+Options -Indexes
+
+# Error Pages
+ErrorDocument 404 /ghazali/admin/login.php
+ErrorDocument 403 /ghazali/admin/login.php
+ErrorDocument 500 /ghazali/admin/login.php
+
+# Gzip Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/xml
+    AddOutputFilterByType DEFLATE application/xhtml+xml
+    AddOutputFilterByType DEFLATE application/rss+xml
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/x-javascript
+    AddOutputFilterByType DEFLATE application/json
+</IfModule>
+
+# Browser Caching
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/jpg "access plus 1 year"
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType image/gif "access plus 1 year"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType image/svg+xml "access plus 1 year"
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/pdf "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType application/x-javascript "access plus 1 month"
+    ExpiresByType font/ttf "access plus 1 year"
+    ExpiresByType font/woff "access plus 1 year"
+    ExpiresByType font/woff2 "access plus 1 year"
+</IfModule>
+
+# PHP Settings
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 10M
+    php_value post_max_size 10M
+    php_value max_execution_time 300
+    php_value max_input_time 300
+    php_value memory_limit 256M
+</IfModule>
+
+# UTF-8 Encoding
+AddDefaultCharset UTF-8
+
+# Force UTF-8 for text files
+AddCharset UTF-8 .html .css .js .xml .json .rss .atom
+
+# Additional security - Prevent script injection
+<IfModule mod_rewrite.c>
+    RewriteCond %{QUERY_STRING} (<|%3C).*script.*(>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} GLOBALS(=|[|%[0-9A-Z]{0,2}) [OR]
+    RewriteCond %{QUERY_STRING} _REQUEST(=|[|%[0-9A-Z]{0,2}) [OR]
+    RewriteCond %{QUERY_STRING} (<|%3C)([^s]*s)+cript.*(>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} (\<|%3C).*iframe.*(\>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} base64_encode.*\(.*\) [NC,OR]
+    RewriteCond %{QUERY_STRING} (\<|%3C).*object.*(\>|%3E) [NC,OR]
+    RewriteCond %{QUERY_STRING} concat.*\(.*\) [NC,OR]
+    RewriteCond %{QUERY_STRING} union.*select.*\( [NC,OR]
+    RewriteCond %{QUERY_STRING} union.*all.*select.* [NC]
+    RewriteRule ^(.*)$ - [F,L]
+</IfModule>

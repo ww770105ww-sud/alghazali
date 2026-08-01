@@ -1,9 +1,7 @@
 <?php
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require_once '../includes/session_config.php';
 require_once '../includes/db.php';
 require_once '../includes/functions.php';
 
@@ -230,13 +228,55 @@ if (isset($_POST['delete_attendance_location'])) {
 }
 
 // تحديث الإعدادات العامة وروابط التواصل
-if (isset($_POST['update_settings'])) {
+$is_settings_save_request = $_SERVER['REQUEST_METHOD'] === 'POST'
+    && (
+        isset($_POST['update_settings'])
+        || (
+            isset($_POST['active_tab'])
+            && !isset($_POST['save_relationship'])
+            && !isset($_POST['save_requirement'])
+            && !isset($_POST['save_attendance_location'])
+            && !isset($_POST['delete_attendance_location'])
+            && !isset($_POST['save_type'])
+            && !isset($_POST['delete_passport_type'])
+        )
+    );
+
+if ($is_settings_save_request) {
+    // Test log to make sure we get here
+    $test_log = __DIR__ . '/../test_post_log.txt';
+    $test_content = date('Y-m-d H:i:s') . " - Update settings triggered!\n";
+    $test_content .= "POST keys: " . print_r(array_keys($_POST), true) . "\n";
+    file_put_contents($test_log, $test_content, FILE_APPEND);
+    
     $active_tab = $_POST['active_tab'] ?? 'general';
 
     if ($active_tab === 'backup' && !$is_admin) {
         $_SESSION['flash_message'] = ['type' => 'danger', 'title' => 'خطأ!', 'body' => 'غير مصرح لك بتعديل إعدادات النسخ الاحتياطي.'];
         header('Location: settings.php?tab=general');
         exit();
+    }
+
+    try {
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS module_audit_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                module_key VARCHAR(100) NOT NULL,
+                module_name VARCHAR(255) NOT NULL,
+                old_value VARCHAR(10) NULL,
+                new_value VARCHAR(10) NOT NULL,
+                user_id INT NULL,
+                username VARCHAR(100) NULL,
+                ip_address VARCHAR(50) NULL,
+                user_agent TEXT NULL,
+                changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_module_key (module_key),
+                INDEX idx_user_id (user_id),
+                INDEX idx_changed_at (changed_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+    } catch (Exception $e) {
+        error_log("Module audit table create error: " . $e->getMessage());
     }
 
     $pdo->beginTransaction();
@@ -301,6 +341,15 @@ if (isset($_POST['update_settings'])) {
             'auto_delete_messages' => 'bool',
             'enable_notification_sound' => 'bool',
             'enable_message_sound' => 'bool',
+            'enable_bus_bookings' => 'bool',
+            'enable_flight_bookings' => 'bool',
+            'enable_passport_transactions' => 'bool',
+            'enable_work_visa' => 'bool',
+            'enable_family_visit' => 'bool',
+            'enable_postal_services' => 'bool',
+            'enable_umrah' => 'bool',
+            'enable_hajj' => 'bool',
+            'enable_crm' => 'bool',
             'show_service_terms' => 'bool',
             'show_general_terms' => 'bool',
             // Colors
@@ -380,8 +429,13 @@ if (isset($_POST['update_settings'])) {
             'passports_cost_account' => 'int',
             'passports_profit_account' => 'int',
             'umrah_service_terms' => 'text',
+            'umrah_default_max_muatamers' => 'int',
+            'min_passport_validity_months' => 'int',
+            'visa_expiry_alert_days' => 'int',
             'work_visa_service_terms' => 'text',
             'family_visit_service_terms' => 'text',
+            'family_visit_default_validity_months' => 'int',
+            'family_visit_expiry_warning_days' => 'int',
             'bus_flight_service_terms' => 'text',
             'passport_service_terms' => 'text',
             'exchange_gain_account_id' => 'int',
@@ -412,15 +466,77 @@ if (isset($_POST['update_settings'])) {
             'enable_supplier_limit_check' => 'bool',
             'enable_debit_limit_check' => 'bool',
             'enable_tax_fields' => 'bool',
+            'allow_cancel_without_reverse' => 'bool',
             // النسخ الاحتياطي لقاعدة البيانات
             'backup_local_enabled' => 'bool',
             'backup_local_path' => 'path_safe',
             'backup_schedule_time' => 'time_hm',
             'backup_notify_due' => 'bool',
+            // Time/Date/Settings
+            'timezone' => 'string',
+            'date_format' => 'string',
+            'time_format' => 'string',
+            'first_day_of_week' => 'string',
+            'auto_sync_time' => 'bool',
+            // Attendance Settings
+            'attendance_early_minutes' => 'int',
+            'attendance_late_minutes' => 'int',
+            'departure_early_minutes' => 'int',
+            'departure_late_minutes' => 'int',
+            'prevent_outside_attendance' => 'bool',
+            // Session Settings
+            'allow_multiple_sessions' => 'bool',
+            'session_behavior' => 'string',
         ];
+
+        // Log service accounts save
+        $log_content = date('Y-m-d H:i:s') . " - Service accounts save start\n";
+        $log_content .= "POST data: " . print_r($_POST, true) . "\n";
+        if (($active_tab ?? '') === 'accounting') {
+            $db_services = $pdo->query("SELECT id FROM services")->fetchAll(PDO::FETCH_COLUMN);
+            $log_content .= "DB Services: " . print_r($db_services, true) . "\n";
+            foreach ($db_services as $service_id) {
+                $revenue_account_id = !empty($_POST["service_{$service_id}_revenue"]) ? (int)$_POST["service_{$service_id}_revenue"] : null;
+                $cost_account_id = !empty($_POST["service_{$service_id}_cost"]) ? (int)$_POST["service_{$service_id}_cost"] : null;
+                $profit_account_id = !empty($_POST["service_{$service_id}_profit"]) ? (int)$_POST["service_{$service_id}_profit"] : null;
+
+                $log_content .= "Service {$service_id}: revenue={$revenue_account_id}, cost={$cost_account_id}, profit={$profit_account_id}\n";
+
+                $stmt = $pdo->prepare("UPDATE services SET revenue_account_id = ?, cost_account_id = ?, profit_account_id = ? WHERE id = ?");
+                $stmt->execute([$revenue_account_id, $cost_account_id, $profit_account_id, $service_id]);
+
+                $log_content .= "  Rows affected: " . $stmt->rowCount() . "\n";
+            }
+        } else {
+            $log_content .= "Skipped service accounts because active tab is {$active_tab}\n";
+        }
+        $log_file = __DIR__ . '/../service_accounts.log';
+        file_put_contents($log_file, $log_content, FILE_APPEND);
+
+        // Debug log: Log all expected_settings and $_POST keys
+        $debug_log = __DIR__ . '/../settings_debug.log';
+        $debug_content = date('Y-m-d H:i:s') . " - Settings save start\n";
+        $debug_content .= "POST keys: " . print_r(array_keys($_POST), true) . "\n";
+        $debug_content .= "Expected settings keys: " . print_r(array_keys($expected_settings), true) . "\n";
+        file_put_contents($debug_log, $debug_content, FILE_APPEND);
+
+
+        // Define modules list for audit logging
+        $modules_list = get_module_definitions();
+        $current_settings_snapshot = getSettings($pdo);
+        $submitted_settings = [];
+        if (!empty($_POST['__submitted_settings']) && is_array($_POST['__submitted_settings'])) {
+            $submitted_settings = array_values(array_unique(array_filter(array_map(static function ($key) {
+                return preg_replace('/[^a-zA-Z0-9_]/', '', (string) $key);
+            }, $_POST['__submitted_settings']))));
+        }
+        $has_submitted_manifest = !empty($submitted_settings);
 
         foreach ($expected_settings as $key => $type) {
             if (strncmp((string)$key, 'backup_', 7) === 0 && ($active_tab ?? '') !== 'backup') {
+                continue;
+            }
+            if ($type === 'bool' && $has_submitted_manifest && !in_array($key, $submitted_settings, true)) {
                 continue;
             }
             if (isset($_POST[$key]) || $type === 'bool') {
@@ -479,11 +595,51 @@ if (isset($_POST['update_settings'])) {
                     break;
             }
 
+            // Get old value for audit log (only for modules)
+            $old_value = null;
+            if (isset($modules_list[$key])) {
+                $old_stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+                $old_stmt->execute([$key]);
+                $old_value = $old_stmt->fetchColumn();
+                if ($old_value === false) {
+                    $old_value = $current_settings_snapshot[$key] ?? '0';
+                }
+            }
+
             $stmt = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, setting_group)
                                    VALUES (?, ?, ?)
                                    ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
-            $stmt->execute([$key, $value, 'general']);
+            $result = $stmt->execute([$key, $value, 'general']);
+
+            // Log module changes
+            if (isset($modules_list[$key]) && $old_value !== null && $old_value != $value) {
+                try {
+                    $audit_stmt = $pdo->prepare("
+                        INSERT INTO module_audit_log 
+                        (module_key, module_name, old_value, new_value, user_id, username, ip_address, user_agent)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ");
+                    $audit_stmt->execute([
+                        $key,
+                        $modules_list[$key],
+                        $old_value,
+                        $value,
+                        $_SESSION['user_id'] ?? $_SESSION['admin_id'] ?? null,
+                        $_SESSION['username'] ?? null,
+                        $_SERVER['REMOTE_ADDR'] ?? null,
+                        $_SERVER['HTTP_USER_AGENT'] ?? null
+                    ]);
+                } catch (Exception $e) {
+                    error_log("Module audit log error: " . $e->getMessage());
+                }
+            }
+
+            // Add to debug log
+            $debug_content .= "Processing {$key} (type {$type}): value = " . var_export($value, true) . ", result = " . ($result ? 'OK' : 'FAIL') . "\n";
+            file_put_contents($debug_log, $debug_content, FILE_APPEND);
         }
+
+
 
         // رمز استدعاء النسخ الاحتياطي المجدول (تبويب backup)
         if (($active_tab ?? '') === 'backup') {
@@ -601,52 +757,66 @@ if (isset($_POST['update_settings'])) {
         }
 
         // تحسين إدارة روابط التواصل الاجتماعي
-        $posted_ids = [];
-        if (isset($_POST['social_link_id'])) {
-            foreach ($_POST['social_link_id'] as $key => $id) {
-                $platform_name = trim($_POST['social_platform_name'][$key] ?? '');
-                $link_url = trim($_POST['social_link_url'][$key] ?? '');
+        if (($active_tab ?? '') === 'contact') {
+            $posted_ids = [];
+            if (isset($_POST['social_link_id'])) {
+                foreach ($_POST['social_link_id'] as $key => $id) {
+                    $platform_name = trim($_POST['social_platform_name'][$key] ?? '');
+                    $link_url = trim($_POST['social_link_url'][$key] ?? '');
 
-                if (empty($platform_name) || empty($link_url)) continue;
+                    if (empty($platform_name) || empty($link_url)) continue;
 
-                $platform_icon = match ($platform_name) {
-                    'Facebook' => 'fab fa-facebook-f',
-                    'Twitter' => 'fab fa-twitter',
-                    'Instagram' => 'fab fa-instagram',
-                    'LinkedIn' => 'fab fa-linkedin-in',
-                    'YouTube' => 'fab fa-youtube',
-                    'WhatsApp' => 'fab fa-whatsapp',
-                    'Telegram' => 'fab fa-telegram-plane',
-                    'TikTok' => 'fab fa-tiktok',
-                    default => 'fas fa-link',
-                };
+                    $platform_icon = match ($platform_name) {
+                        'Facebook' => 'fab fa-facebook-f',
+                        'Twitter' => 'fab fa-twitter',
+                        'Instagram' => 'fab fa-instagram',
+                        'LinkedIn' => 'fab fa-linkedin-in',
+                        'YouTube' => 'fab fa-youtube',
+                        'WhatsApp' => 'fab fa-whatsapp',
+                        'Telegram' => 'fab fa-telegram-plane',
+                        'TikTok' => 'fab fa-tiktok',
+                        default => 'fas fa-link',
+                    };
 
-                if ($id == 0) {
-                    $stmt = $pdo->prepare("INSERT INTO social_links (platform_name, platform_icon, link_url) VALUES (?, ?, ?)");
-                    $stmt->execute([$platform_name, $platform_icon, $link_url]);
-                    $posted_ids[] = $pdo->lastInsertId();
-                } else {
-                    $stmt = $pdo->prepare("UPDATE social_links SET platform_name = ?, platform_icon = ?, link_url = ? WHERE id = ?");
-                    $stmt->execute([$platform_name, $platform_icon, $link_url, $id]);
-                    $posted_ids[] = $id;
+                    if ($id == 0) {
+                        $stmt = $pdo->prepare("INSERT INTO social_links (platform_name, platform_icon, link_url) VALUES (?, ?, ?)");
+                        $stmt->execute([$platform_name, $platform_icon, $link_url]);
+                        $posted_ids[] = $pdo->lastInsertId();
+                    } else {
+                        $stmt = $pdo->prepare("UPDATE social_links SET platform_name = ?, platform_icon = ?, link_url = ? WHERE id = ?");
+                        $stmt->execute([$platform_name, $platform_icon, $link_url, $id]);
+                        $posted_ids[] = $id;
+                    }
                 }
+            }
+
+            $current_ids = $pdo->query("SELECT id FROM social_links")->fetchAll(PDO::FETCH_COLUMN);
+            $ids_to_delete = array_diff($current_ids, $posted_ids);
+            if (!empty($ids_to_delete)) {
+                $placeholders = implode(',', array_fill(0, count($ids_to_delete), '?'));
+                $stmt = $pdo->prepare("DELETE FROM social_links WHERE id IN ($placeholders)");
+                $stmt->execute(array_values($ids_to_delete));
             }
         }
 
-        $current_ids = $pdo->query("SELECT id FROM social_links")->fetchAll(PDO::FETCH_COLUMN);
-        $ids_to_delete = array_diff($current_ids, $posted_ids);
-        if (!empty($ids_to_delete)) {
-            $placeholders = implode(',', array_fill(0, count($ids_to_delete), '?'));
-            $stmt = $pdo->prepare("DELETE FROM social_links WHERE id IN ($placeholders)");
-            $stmt->execute(array_values($ids_to_delete));
+        if ($pdo->inTransaction()) {
+            $pdo->commit();
         }
-
-        $pdo->commit();
         $_SESSION['flash_message'] = ['type' => 'success', 'title' => 'نجاح!', 'body' => 'تم تحديث الإعدادات بنجاح.'];
-        header("Location: settings.php?tab=$active_tab#$active_tab");
+        unset($_SESSION['settings_cache'], $_SESSION['module_settings_cache']);
+        header("Location: settings.php?tab=$active_tab&saved=1#$active_tab");
         exit();
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
+        
+        // Log the error
+        $log_file = __DIR__ . '/../settings_error.log';
+        $log_content = date('Y-m-d H:i:s') . "\n";
+        $log_content .= "Error: " . $e->getMessage() . "\n";
+        $log_content .= "Stack trace: " . $e->getTraceAsString() . "\n";
+        $log_content .= "POST: " . print_r($_POST, true) . "\n";
+        file_put_contents($log_file, $log_content, FILE_APPEND);
+        
         $_SESSION['flash_message'] = ['type' => 'danger', 'title' => 'خطأ!', 'body' => 'حدث خطأ: ' . $e->getMessage()];
         header("Location: settings.php?tab=$active_tab#$active_tab");
         exit();
@@ -666,17 +836,18 @@ if (isset($_POST['save_type'])) {
     $default_cost = $_POST['default_cost'];
     $default_sale_price = $_POST['default_sale_price'];
     $currency_id = $_POST['currency_id'];
+    $service_id = !empty($_POST['service_id']) ? (int)$_POST['service_id'] : null;
     $is_active = isset($_POST['is_active']) ? 1 : 0;
     $print_terms = $_POST['print_terms'] ?? '';
 
     try {
         if ($id) {
-            $stmt = $pdo->prepare("UPDATE passport_transaction_types SET type_name = ?, default_cost = ?, default_sale_price = ?, currency_id = ?, is_active = ?, print_terms = ? WHERE id = ?");
-            $stmt->execute([$type_name, $default_cost, $default_sale_price, $currency_id, $is_active, $print_terms, $id]);
+            $stmt = $pdo->prepare("UPDATE passport_transaction_types SET type_name = ?, default_cost = ?, default_sale_price = ?, currency_id = ?, service_id = ?, is_active = ?, print_terms = ? WHERE id = ?");
+            $stmt->execute([$type_name, $default_cost, $default_sale_price, $currency_id, $service_id, $is_active, $print_terms, $id]);
             $_SESSION['flash_message'] = ['type' => 'success', 'title' => 'نجاح!', 'body' => 'تم تحديث النوع بنجاح.'];
         } else {
-            $stmt = $pdo->prepare("INSERT INTO passport_transaction_types (type_name, default_cost, default_sale_price, currency_id, is_active, print_terms) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$type_name, $default_cost, $default_sale_price, $currency_id, $is_active, $print_terms]);
+            $stmt = $pdo->prepare("INSERT INTO passport_transaction_types (type_name, default_cost, default_sale_price, currency_id, service_id, is_active, print_terms) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$type_name, $default_cost, $default_sale_price, $currency_id, $service_id, $is_active, $print_terms]);
             $_SESSION['flash_message'] = ['type' => 'success', 'title' => 'نجاح!', 'body' => 'تمت إضافة النوع بنجاح.'];
         }
         header('Location: settings.php#passport-pricing');
@@ -704,9 +875,10 @@ if (isset($_POST['delete_passport_type'])) {
 
 // Fetch Types for display in the tab
 $passport_transaction_types = $pdo->query("
-    SELECT t.*, c.currency_name, c.currency_symbol
+    SELECT t.*, c.currency_name, c.currency_symbol, s.service_name
     FROM passport_transaction_types t
     LEFT JOIN currencies c ON t.currency_id = c.id
+    LEFT JOIN services s ON t.service_id = s.id
     ORDER BY t.type_name
 ")->fetchAll();
 $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol FROM currencies WHERE is_active = 1 ORDER BY currency_name ASC")->fetchAll();
@@ -737,9 +909,32 @@ if (isset($_SESSION['flash_message'])) {
 }
 
 $settings = getSettings($pdo);
+
 if (!$settings) {
     $settings = [];
 }
+
+if (!function_exists('settings_dark_surface_color')) {
+    function settings_dark_surface_color($color, $fallback = '#111827') {
+        $color = trim((string)$color);
+        if (!preg_match('/^#?([0-9a-fA-F]{6})$/', $color, $matches)) {
+            return $fallback;
+        }
+
+        $hex = $matches[1];
+        $r = hexdec(substr($hex, 0, 2));
+        $g = hexdec(substr($hex, 2, 2));
+        $b = hexdec(substr($hex, 4, 2));
+        $luminance = (($r * 299) + ($g * 587) + ($b * 114)) / 1000;
+
+        return $luminance > 150 ? $fallback : '#' . $hex;
+    }
+}
+
+$settings_dark_bg_color = settings_dark_surface_color($settings['bg_color_dark'] ?? '', '#0b1120');
+$settings_dark_card_bg_color = settings_dark_surface_color($settings['card_bg_dark'] ?? '', '#111827');
+$settings_dark_border_color = settings_dark_surface_color($settings['border_color_dark'] ?? '', '#25344d');
+
 $social_links = $pdo->query("SELECT * FROM social_links ORDER BY id ASC")->fetchAll();
 $services = $pdo->query("SELECT id, service_name FROM services ORDER BY service_name ASC")->fetchAll();
 
@@ -787,12 +982,21 @@ if (!empty($attendance_locations)) {
 
 <style>
     :root {
-        --primary-color: <?php echo $settings['primary_color'] ?: '#2563eb'; ?>;
-        --text-color: #1f2937;
+        --primary-color: <?php echo $settings['primary_color_light'] ?: '#1d3dbc'; ?>;
+        --text-color: <?php echo $settings['text_color_light'] ?: '#0f1f44'; ?>;
         --muted-text-color: #6b7280;
-        --bg-color: #f4f6f8;
-        --card-bg-color: #ffffff;
-        --border-color: #d6dbe4;
+        --bg-color: <?php echo $settings['bg_color_light'] ?: '#f8f9fc'; ?>;
+        --card-bg-color: <?php echo $settings['card_bg_light'] ?: '#ffffff'; ?>;
+        --border-color: <?php echo $settings['border_color_light'] ?: '#dbe2f2'; ?>;
+    }
+
+    body.theme-dark {
+        --primary-color: <?php echo $settings['primary_color_dark'] ?: '#1d3dbc'; ?>;
+        --text-color: <?php echo $settings['text_color_dark'] ?: '#edf2ff'; ?>;
+        --muted-text-color: #94a3b8;
+        --bg-color: <?php echo $settings_dark_bg_color; ?>;
+        --card-bg-color: <?php echo $settings_dark_card_bg_color; ?>;
+        --border-color: <?php echo $settings_dark_border_color; ?>;
     }
 
     .container-fluid {
@@ -817,6 +1021,25 @@ if (!empty($attendance_locations)) {
         box-shadow: none;
     }
 
+    .form-switch-container {
+        padding: 1.5rem;
+        border-radius: 0.75rem;
+        background: var(--card-bg-color, #ffffff);
+        border: 1px solid var(--border-color, #e2e8f0);
+    }
+
+    .form-switch-container .form-switch {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .form-switch-container .form-check-input {
+        width: 2.8em;
+        height: 1.4em;
+        margin-top: 0.25em;
+    }
+
     .nav-tabs-custom .nav-link {
         border: none;
         border-bottom: 2px solid transparent;
@@ -838,25 +1061,35 @@ if (!empty($attendance_locations)) {
         border-bottom-color: var(--primary-color);
     }
 
-    body.theme-dark .nav-tabs-custom {
-        background: #111827;
-        border-bottom-color: rgba(255, 255, 255, 0.12);
+    body.theme-dark .nav-tabs-custom,
+    body.dark-mode .nav-tabs-custom {
+        background: #111827 !important;
+        border-bottom-color: #25344d !important;
         box-shadow: none;
     }
 
-    body.theme-dark .nav-tabs-custom .nav-link {
-        color: #cbd5e1;
+    body.theme-dark .nav-tabs-custom .nav-link,
+    body.dark-mode .nav-tabs-custom .nav-link {
+        color: #f8fafc !important;
     }
 
-    body.theme-dark .nav-tabs-custom .nav-link:hover {
-        color: #ffffff;
-        background: rgba(255, 255, 255, 0.08);
+    body.theme-dark .nav-tabs-custom .nav-link:hover,
+    body.dark-mode .nav-tabs-custom .nav-link:hover {
+        color: #ffffff !important;
+        background: #1e293b !important;
     }
 
-    body.theme-dark .nav-tabs-custom .nav-link.active {
-        color: #ffffff;
-        background: transparent;
-        border-bottom-color: var(--primary-color);
+    body.theme-dark .nav-tabs-custom .nav-link.active,
+    body.dark-mode .nav-tabs-custom .nav-link.active {
+        color: #ffffff !important;
+        background: #0f172a !important;
+        border-bottom-color: var(--primary-color) !important;
+    }
+
+    body.theme-dark .tab-content,
+    body.dark-mode .tab-content {
+        background: #111827 !important;
+        color: #f8fafc !important;
     }
 
     .form-label {
@@ -942,9 +1175,58 @@ if (!empty($attendance_locations)) {
         border-radius: 0.75rem;
     }
 
-    body.dark-mode .form-check.form-switch.p-3 {
-        background: #1e293b;
-        border-color: #334155;
+    body.dark-mode .form-check.form-switch.p-3,
+    body.theme-dark .form-check.form-switch.p-3 {
+        background: var(--card-bg-color);
+        border-color: var(--border-color);
+    }
+    
+    body.theme-dark .form-switch-container { 
+        background: var(--card-bg-color) !important; 
+        border-color: var(--border-color) !important; 
+    }
+    body.theme-dark .form-switch-container .text-primary { color: #60a5fa !important; }
+    body.theme-dark .form-switch-container .text-success { color: #34d399 !important; }
+    body.theme-dark .form-switch-container .text-warning { color: #fbbf24 !important; }
+    body.theme-dark .form-switch-container .text-info { color: #7dd3fc !important; }
+    body.theme-dark .form-switch-container .text-danger { color: #f87171 !important; }
+    body.theme-dark .form-switch-container .text-dark { color: var(--text-color) !important; }
+
+    /* Make text visible in dark mode */
+    body.theme-dark,
+    body.theme-dark h2,
+    body.theme-dark h3,
+    body.theme-dark h4,
+    body.theme-dark h5,
+    body.theme-dark h6,
+    body.theme-dark p,
+    body.theme-dark label,
+    body.theme-dark .form-check-label {
+        color: var(--text-color) !important;
+    }
+
+    body.theme-dark .text-muted {
+        color: var(--muted-text-color) !important;
+    }
+
+    /* Dark mode form controls */
+    body.theme-dark .form-control,
+    body.theme-dark .form-select {
+        background-color: var(--card-bg-color);
+        border-color: var(--border-color);
+        color: var(--text-color);
+    }
+
+    body.theme-dark .form-control:focus,
+    body.theme-dark .form-select:focus {
+        background-color: var(--card-bg-color);
+        color: var(--text-color);
+    }
+
+    /* Dark mode upload preview */
+    body.theme-dark .upload-preview {
+        background: var(--card-bg-color);
+        border-color: var(--border-color);
     }
 </style>
 
@@ -958,7 +1240,7 @@ if (!empty($attendance_locations)) {
         <?php
         // تحديد التبويب النشط
         $active_tab = 'general'; // الافتراضي
-        $allowed_tabs = ['general', 'appearance', 'print', 'features', 'work_visa', 'family_visit', 'modules', 'umrah', 'bookings', 'accounting', 'backup', 'seo', 'contact', 'attendance', 'domain_ssl', 'passport-pricing'];
+        $allowed_tabs = ['general', 'appearance', 'print', 'features', 'work_visa', 'family_visit', 'modules', 'umrah', 'bookings', 'accounting', 'backup', 'seo', 'contact', 'attendance', 'domain_ssl', 'passport-pricing', 'crm', 'time_date'];
         if (isset($_POST['active_tab']) && !empty($_POST['active_tab']) && in_array($_POST['active_tab'], $allowed_tabs)) {
             $active_tab = $_POST['active_tab'];
         } elseif (isset($_GET['tab']) && !empty($_GET['tab']) && in_array($_GET['tab'], $allowed_tabs)) {
@@ -986,6 +1268,11 @@ if (!empty($attendance_locations)) {
                 <li class="nav-item">
                     <button class="nav-link <?php echo ($active_tab === 'features') ? 'active' : ''; ?>" data-bs-toggle="tab" data-bs-target="#features" type="button">
                         <i class="fas fa-toggle-on me-2"></i> الوظائف والميزات
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link <?php echo ($active_tab === 'crm') ? 'active' : ''; ?>" data-bs-toggle="tab" data-bs-target="#crm" type="button">
+                        <i class="fas fa-comments me-2"></i> إعدادات CRM
                     </button>
                 </li>
                 <li class="nav-item">
@@ -1040,6 +1327,11 @@ if (!empty($attendance_locations)) {
                 <li class="nav-item">
                     <button class="nav-link <?php echo ($active_tab === 'attendance') ? 'active' : ''; ?>" data-bs-toggle="tab" data-bs-target="#attendance" type="button">
                         <i class="fas fa-clock me-2"></i> إعدادات الحضور والانصراف
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link <?php echo ($active_tab === 'time_date') ? 'active' : ''; ?>" data-bs-toggle="tab" data-bs-target="#time_date" type="button">
+                        <i class="fas fa-calendar-alt me-2"></i> إعدادات الوقت والتاريخ
                     </button>
                 </li>
                 <li class="nav-item">
@@ -1342,7 +1634,7 @@ if (!empty($attendance_locations)) {
                             <div class="form-switch-container h-100">
                                 <div class="form-switch">
                                     <label class="form-check-label small fw-bold text-dark">إظهار أزرار التحكم</label>
-                                    <input class="form-check-input" type="checkbox" name="slider_controls" <?php echo $settings['slider_controls'] ? 'checked' : ''; ?>>
+                                    <input class="form-check-input" type="checkbox" name="slider_controls" <?php echo ($settings['slider_controls'] ?? 0) ? 'checked' : ''; ?>>
                                 </div>
                             </div>
                         </div>
@@ -1482,7 +1774,7 @@ if (!empty($attendance_locations)) {
                             <div class="form-switch-container">
                                 <div class="form-switch">
                                     <label class="form-check-label fw-bold">إظهار شروط الخدمة الخاصة</label>
-                                    <input class="form-check-input" type="checkbox" name="show_service_terms" <?php echo $settings['show_service_terms'] ? 'checked' : ''; ?>>
+                                    <input class="form-check-input" type="checkbox" name="show_service_terms" <?php echo ($settings['show_service_terms'] ?? 0) ? 'checked' : ''; ?>>
                                 </div>
                             </div>
                         </div>
@@ -1490,7 +1782,7 @@ if (!empty($attendance_locations)) {
                             <div class="form-switch-container">
                                 <div class="form-switch">
                                     <label class="form-check-label fw-bold">إظهار الشروط العامة أسفل السند</label>
-                                    <input class="form-check-input" type="checkbox" name="show_general_terms" <?php echo $settings['show_general_terms'] ? 'checked' : ''; ?>>
+                                    <input class="form-check-input" type="checkbox" name="show_general_terms" <?php echo ($settings['show_general_terms'] ?? 0) ? 'checked' : ''; ?>>
                                 </div>
                             </div>
                         </div>
@@ -1605,18 +1897,30 @@ if (!empty($attendance_locations)) {
                     </div>
                 </div>
 
+                <!-- تبويب إعدادات CRM -->
+                <div class="tab-pane fade <?php echo ($active_tab === 'crm') ? 'show active' : ''; ?>" id="crm">
+                    <div class="section-title"><i class="fas fa-cogs text-primary"></i> إعدادات وحدة CRM</div>
+                    <div class="d-flex justify-content-end gap-2 mt-4">
+                        <a href="crm/settings.php" class="btn btn-outline-primary"><i class="fas fa-arrow-right me-2"></i> إعدادات متقدمة لـ WhatsApp</a>
+                    </div>
+                </div>
+
                 <!-- تبويب إعدادات العمرة (New) -->
                 <div class="tab-pane fade <?php echo ($active_tab === 'umrah') ? 'show active' : ''; ?>" id="umrah">
                     <div class="section-title"><i class="fas fa-kaaba text-primary"></i> إعدادات موديول العمرة</div>
 
                     <div class="row g-4 mb-5">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <label class="form-label">أقل مدة صلاحية للجواز (بالأشهر)</label>
                             <input type="number" name="min_passport_validity_months" class="form-control" value="<?php echo $settings['min_passport_validity_months'] ?? 6; ?>">
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <label class="form-label">التنبيه قبل انتهاء التأشيرة بـ (أيام)</label>
                             <input type="number" name="visa_expiry_alert_days" class="form-control" value="<?php echo $settings['visa_expiry_alert_days'] ?? 5; ?>">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">الحد الأقصى الافتراضي للمعتمرين لكل مستضيف</label>
+                            <input type="number" name="umrah_default_max_muatamers" class="form-control" value="<?php echo $settings['umrah_default_max_muatamers'] ?? 5; ?>" min="1">
                         </div>
                     </div>
 
@@ -1912,9 +2216,9 @@ if (!empty($attendance_locations)) {
                                 <?php
                                 $profs = $pdo->query("SELECT * FROM professions ORDER BY name_ar ASC")->fetchAll();
                                 foreach ($profs as $prof):
-                                    $reqs = $pdo->prepare("SELECT requirement_name FROM profession_requirements WHERE profession_id = ?");
+                                    $reqs = $pdo->prepare("SELECT requirement_name, COALESCE(gender, 'both') AS gender FROM profession_requirements WHERE profession_id = ? ORDER BY id ASC");
                                     $reqs->execute([$prof['id']]);
-                                    $reqs_list = $reqs->fetchAll(PDO::FETCH_COLUMN);
+                                    $reqs_list = $reqs->fetchAll(PDO::FETCH_ASSOC);
 
                                     $rules = $pdo->prepare("SELECT * FROM work_visa_rules WHERE profession_id = ?");
                                     $rules->execute([$prof['id']]);
@@ -1925,7 +2229,21 @@ if (!empty($attendance_locations)) {
                                         <td><span class="badge bg-light text-dark"><?php echo htmlspecialchars($prof['code'] ?: '---'); ?></span></td>
                                         <td>
                                             <small class="text-muted">
-                                                <?php echo !empty($reqs_list) ? implode('، ', $reqs_list) : 'لا توجد متطلبات'; ?>
+                                                <?php
+                                                if (!empty($reqs_list)) {
+                                                    echo implode('، ', array_map(static function ($req) {
+                                                        $suffix = '';
+                                                        if (($req['gender'] ?? 'both') === 'male') {
+                                                            $suffix = ' [للذكر]';
+                                                        } elseif (($req['gender'] ?? 'both') === 'female') {
+                                                            $suffix = ' [للأنثى]';
+                                                        }
+                                                        return $req['requirement_name'] . $suffix;
+                                                    }, $reqs_list));
+                                                } else {
+                                                    echo 'لا توجد متطلبات';
+                                                }
+                                                ?>
                                             </small>
                                         </td>
                                         <td>
@@ -2047,6 +2365,22 @@ if (!empty($attendance_locations)) {
                         </div>
                     <?php endif; ?>
 
+                    <div class="section-title mt-4"><i class="fas fa-hourglass-half text-primary"></i> صلاحية الزيارة والتنبيهات</div>
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small">المدة الافتراضية (بالأشهر)</label>
+                            <input type="number" name="family_visit_default_validity_months" class="form-control" min="1" max="60"
+                                   value="<?php echo htmlspecialchars((string)($settings['family_visit_default_validity_months'] ?? 1)); ?>">
+                            <div class="form-text">تستخدم لحساب تاريخ الانتهاء تلقائيًا في شاشة الزيارة العائلية.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small">تنبيه قبل الانتهاء (بالأيام)</label>
+                            <input type="number" name="family_visit_expiry_warning_days" class="form-control" min="0" max="3650"
+                                   value="<?php echo htmlspecialchars((string)($settings['family_visit_expiry_warning_days'] ?? 0)); ?>">
+                            <div class="form-text">0 = بدون تنبيه.</div>
+                        </div>
+                    </div>
+
                     <!-- شروط خدمات الزيارة العائلية -->
                     <div class="section-title mt-4"><i class="fas fa-file-contract text-warning"></i> شروط خدمات الزيارة العائلية</div>
                     <div class="row g-4 mb-5">
@@ -2066,8 +2400,16 @@ if (!empty($attendance_locations)) {
                             <div class="col-md-4">
                                 <div class="form-switch-container h-100 border-start border-primary border-4 shadow-sm">
                                     <div class="form-switch">
-                                        <label class="form-check-label fw-bold small text-primary">تفعيل موديول الحجوزات (ON/OFF)</label>
-                                        <input class="form-check-input" type="checkbox" name="enable_bus_flight_bookings" <?php echo ($settings['enable_bus_flight_bookings'] ?? 0) ? 'checked' : ''; ?>>
+                                        <label class="form-check-label fw-bold small text-primary">تفعيل حجوزات الباصات (ON/OFF)</label>
+                                        <input class="form-check-input" type="checkbox" name="enable_bus_bookings" <?php echo ($settings['enable_bus_bookings'] ?? 0) ? 'checked' : ''; ?>>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-switch-container h-100 border-start border-primary border-4 shadow-sm">
+                                    <div class="form-switch">
+                                        <label class="form-check-label fw-bold small text-primary">تفعيل حجوزات الطيران (ON/OFF)</label>
+                                        <input class="form-check-input" type="checkbox" name="enable_flight_bookings" <?php echo ($settings['enable_flight_bookings'] ?? 0) ? 'checked' : ''; ?>>
                                     </div>
                                 </div>
                             </div>
@@ -2096,12 +2438,44 @@ if (!empty($attendance_locations)) {
                                 </div>
                             </div>
                             <div class="col-md-4">
+                                <div class="form-switch-container h-100 border-start border-info border-4 shadow-sm">
+                                    <div class="form-switch">
+                                        <label class="form-check-label fw-bold small text-info">تفعيل خدمات البريد (ON/OFF)</label>
+                                        <input class="form-check-input" type="checkbox" name="enable_postal_services" <?php echo ($settings['enable_postal_services'] ?? 0) ? 'checked' : ''; ?>>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
                                 <div class="form-switch-container h-100 border-start border-danger border-4 shadow-sm">
                                     <div class="form-switch">
                                         <label class="form-check-label fw-bold small text-danger">تفعيل قسم العمرة (ON/OFF)</label>
                                         <input class="form-check-input" type="checkbox" name="enable_umrah" <?php echo ($settings['enable_umrah'] ?? 1) ? 'checked' : ''; ?>>
                                     </div>
                                 </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-switch-container h-100 border-start border-danger border-4 shadow-sm">
+                                    <div class="form-switch">
+                                        <label class="form-check-label fw-bold small text-danger">تفعيل خدمات الحج (ON/OFF)</label>
+                                        <input class="form-check-input" type="checkbox" name="enable_hajj" <?php echo ($settings['enable_hajj'] ?? 1) ? 'checked' : ''; ?>>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-switch-container h-100 border-start border-success border-4 shadow-sm">
+                                    <div class="form-switch">
+                                        <label class="form-check-label fw-bold small text-success">تفعيل وحدة CRM (ON/OFF)</label>
+                                        <input class="form-check-input" type="checkbox" name="enable_crm" <?php echo ($settings['enable_crm'] ?? 1) ? 'checked' : ''; ?>>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-4">
+                            <div class="d-flex gap-3 align-items-center">
+                                <a href="modules_diagnostic.php" class="btn btn-outline-secondary">
+                                    <i class="fas fa-stethoscope me-2"></i> صفحة تشخيص الموديولات
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -2256,6 +2630,13 @@ if (!empty($attendance_locations)) {
                                 <label class="form-check-label fw-bold small text-success"><i class="fas fa-check-double me-1"></i> تفعيل التسوية التلقائية</label>
                             </div>
                         </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch p-3 bg-light rounded-3 h-100 border">
+                                <input class="form-check-input" type="checkbox" name="allow_cancel_without_reverse" <?php echo ($settings['allow_cancel_without_reverse'] ?? 0) ? 'checked' : ''; ?>>
+                                <label class="form-check-label fw-bold small text-primary"><i class="fas fa-file-invoice-times me-1"></i> السماح بإلغاء السند بدون إنشاء قيد عكسي</label>
+                                <div class="form-text extra-small m-0">عكس الأرصدة مباشرة بدون قيد عكسي.</div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="section-title mt-4"><i class="fas fa-file-invoice text-primary"></i> إعدادات ترقيم الفواتير والقيود حسب الخدمة</div>
@@ -2302,8 +2683,8 @@ if (!empty($attendance_locations)) {
                         <input type="hidden" name="journal_digits" id="real_general_journal_digits" value="<?php echo $settings['journal_digits'] ?? 5; ?>">
 
                         <?php
-                        $services = ['bus', 'flight', 'visa', 'umrah', 'family', 'passport'];
-                        foreach ($services as $srv) {
+                        $prefix_services = ['bus', 'flight', 'visa', 'umrah', 'family', 'passport'];
+                        foreach ($prefix_services as $srv) {
                             echo '<input type="hidden" name="srv_' . $srv . '_sales_prefix" id="real_' . $srv . '_sales_prefix" value="' . htmlspecialchars($settings['srv_' . $srv . '_sales_prefix'] ?? 'SI-') . '">';
                             echo '<input type="hidden" name="srv_' . $srv . '_purchase_prefix" id="real_' . $srv . '_purchase_prefix" value="' . htmlspecialchars($settings['srv_' . $srv . '_purchase_prefix'] ?? 'PI-') . '">';
                             echo '<input type="hidden" name="srv_' . $srv . '_journal_prefix" id="real_' . $srv . '_journal_prefix" value="' . htmlspecialchars($settings['srv_' . $srv . '_journal_prefix'] ?? 'JRN-') . '">';
@@ -2366,46 +2747,70 @@ if (!empty($attendance_locations)) {
                             </thead>
                             <tbody>
                                 <?php
-                                $services = [
-                                    ['id' => 'bus', 'label' => 'حجوزات الباصات'],
-                                    ['id' => 'flight', 'label' => 'حجوزات الطيران'],
-                                    ['id' => 'work_visa', 'label' => 'تأشيرات العمل'],
-                                    ['id' => 'umrah', 'label' => 'قسم العمرة'],
-                                    ['id' => 'family_visit', 'label' => 'الزيارة العائلية'],
-                                    ['id' => 'passport', 'label' => 'معاملات الجوازات العام', 'custom_keys' => ['rev' => 'passports_revenue_account', 'cost' => 'passports_cost_account', 'profit' => 'passports_profit_account']],
-                                ];
-                                foreach ($services as $service):
-                                    $rev_key = $service['custom_keys']['rev'] ?? ("revenue_" . $service['id'] . "_account_id");
-                                    $cost_key = $service['custom_keys']['cost'] ?? ("cost_" . $service['id'] . "_account_id");
-                                    $profit_key = $service['custom_keys']['profit'] ?? ("profit_" . $service['id'] . "_account_id");
+                                // Load all services from the database
+                                $db_services_for_accounting = $pdo->query("
+                                    SELECT id, service_name, revenue_account_id, cost_account_id, profit_account_id 
+                                    FROM services 
+                                    ORDER BY service_name ASC
+                                ")->fetchAll();
+
+                                // Load accounts by type
+                                $revenue_accounts = $pdo->query("
+                                    SELECT id, account_code, account_name_ar as account_name 
+                                    FROM unified_accounts 
+                                    WHERE id NOT IN (SELECT DISTINCT parent_id FROM unified_accounts WHERE parent_id IS NOT NULL) 
+                                    AND account_type IN ('income', 'revenue', 'إيراد')
+                                    AND account_status = 'active'
+                                    ORDER BY account_code ASC
+                                ")->fetchAll();
+
+                                $cost_accounts = $pdo->query("
+                                    SELECT id, account_code, account_name_ar as account_name 
+                                    FROM unified_accounts 
+                                    WHERE id NOT IN (SELECT DISTINCT parent_id FROM unified_accounts WHERE parent_id IS NOT NULL) 
+                                    AND account_type = 'expense'
+                                    AND account_status = 'active'
+                                    ORDER BY account_code ASC
+                                ")->fetchAll();
+
+                                $profit_accounts = $pdo->query("
+                                    SELECT id, account_code, account_name_ar as account_name 
+                                    FROM unified_accounts 
+                                    WHERE id NOT IN (SELECT DISTINCT parent_id FROM unified_accounts WHERE parent_id IS NOT NULL) 
+                                    AND (account_type = 'equity' OR account_name_ar LIKE '%أرباح%')
+                                    AND account_status = 'active'
+                                    ORDER BY account_code ASC
+                                ")->fetchAll();
+                                
+                                foreach ($db_services_for_accounting as $service):
                                 ?>
                                     <tr>
-                                        <td class="fw-bold bg-light px-3"><?php echo $service['label']; ?></td>
+                                        <td class="fw-bold bg-light px-3"><?php echo htmlspecialchars($service['service_name']); ?></td>
                                         <td>
-                                            <select name="<?php echo $rev_key; ?>" class="form-select form-select-sm border-0">
+                                            <select name="service_<?php echo $service['id']; ?>_revenue" class="form-select form-select-sm border-0">
                                                 <option value="">--- اختر حساب الإيراد ---</option>
-                                                <?php foreach ($coa_accounts as $acc): ?>
-                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($settings[$rev_key] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
+                                                <?php foreach ($revenue_accounts as $acc): ?>
+                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($service['revenue_account_id'] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
                                                         <?php echo $acc['account_code'] . ' - ' . htmlspecialchars($acc['account_name']); ?>
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
                                         </td>
                                         <td>
-                                            <select name="<?php echo $cost_key; ?>" class="form-select form-select-sm border-0">
+                                            <select name="service_<?php echo $service['id']; ?>_cost" class="form-select form-select-sm border-0">
                                                 <option value="">--- اختر حساب التكلفة ---</option>
-                                                <?php foreach ($coa_accounts as $acc): ?>
-                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($settings[$cost_key] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
+                                                <?php foreach ($cost_accounts as $acc): ?>
+                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($service['cost_account_id'] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
                                                         <?php echo $acc['account_code'] . ' - ' . htmlspecialchars($acc['account_name']); ?>
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
                                         </td>
                                         <td>
-                                            <select name="<?php echo $profit_key; ?>" class="form-select form-select-sm border-0">
+                                            <select name="service_<?php echo $service['id']; ?>_profit" class="form-select form-select-sm border-0">
                                                 <option value="">--- اختر حساب الأرباح ---</option>
-                                                <?php foreach ($coa_accounts as $acc): ?>
-                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($settings[$profit_key] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
+                                                <?php foreach ($profit_accounts as $acc): ?>
+                                                    <option value="<?php echo $acc['id']; ?>" <?php echo (($service['profit_account_id'] ?? '') == $acc['id']) ? 'selected' : ''; ?>>
                                                         <?php echo $acc['account_code'] . ' - ' . htmlspecialchars($acc['account_name']); ?>
                                                     </option>
                                                 <?php endforeach; ?>
@@ -2426,14 +2831,14 @@ if (!empty($attendance_locations)) {
                     <div class="row g-4 mb-4">
                         <div class="col-md-6">
                             <div class="form-check form-switch p-3 bg-light rounded-3 border">
-                                <input class="form-check-input" type="checkbox" name="backup_local_enabled" id="backup_local_enabled" <?php echo !empty($settings['backup_local_enabled']) ? 'checked' : ''; ?>>
+                                <input class="form-check-input" type="checkbox" name="backup_local_enabled" id="backup_local_enabled" <?php echo ($settings['backup_local_enabled'] ?? 0) ? 'checked' : ''; ?>>
                                 <label class="form-check-label fw-bold" for="backup_local_enabled">تفعيل حفظ نسخة على الخادم</label>
                                 <div class="form-text">يظهر زر «حفظ نسخة على الخادم» في صفحة <a href="db_backup.php">db_backup.php</a>.</div>
                             </div>
                         </div>
                         <div class="col-md-6">
                             <div class="form-check form-switch p-3 bg-light rounded-3 border">
-                                <input class="form-check-input" type="checkbox" name="backup_notify_due" id="backup_notify_due" <?php echo !empty($settings['backup_notify_due']) ? 'checked' : ''; ?>>
+                                <input class="form-check-input" type="checkbox" name="backup_notify_due" id="backup_notify_due" <?php echo ($settings['backup_notify_due'] ?? 0) ? 'checked' : ''; ?>>
                                 <label class="form-check-label fw-bold" for="backup_notify_due">تنبيه عند حلول وقت النسخ</label>
                                 <div class="form-text">بعد الوقت المحدد في اليوم، إذا لم تُسجَّل نسخة اليوم، يظهر تنبيه أعلى لوحة التحكم للمدير.</div>
                             </div>
@@ -2609,6 +3014,107 @@ if (!empty($attendance_locations)) {
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- تبويب الوقت والتاريخ -->
+                <div class="tab-pane fade <?php echo ($active_tab === 'time_date') ? 'show active' : ''; ?>" id="time_date">
+                    <div class="section-title"><i class="fas fa-clock text-primary"></i> إعدادات المنطقة الزمنية والتاريخ</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">المنطقة الزمنية</label>
+                            <select name="timezone" class="form-select">
+                                <?php
+                                $timezones = DateTimeZone::listIdentifiers();
+                                foreach ($timezones as $tz):
+                                    $selected = ($settings['timezone'] ?? 'Asia/Riyadh') === $tz ? 'selected' : '';
+                                ?>
+                                    <option value="<?php echo htmlspecialchars($tz); ?>" <?php echo $selected; ?>><?php echo htmlspecialchars($tz); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">تنسيق التاريخ</label>
+                            <select name="date_format" class="form-select">
+                                <?php
+                                $dateFormats = [
+                                    'Y-m-d' => 'YYYY-MM-DD (2024-06-28)',
+                                    'd-m-Y' => 'DD-MM-YYYY (28-06-2024)',
+                                    'm-d-Y' => 'MM-DD-YYYY (06-28-2024)',
+                                    'd/m/Y' => 'DD/MM/YYYY (28/06/2024)',
+                                    'm/d/Y' => 'MM/DD/YYYY (06/28/2024)'
+                                ];
+                                foreach ($dateFormats as $format => $label):
+                                    $selected = ($settings['date_format'] ?? 'Y-m-d') === $format ? 'selected' : '';
+                                ?>
+                                    <option value="<?php echo htmlspecialchars($format); ?>" <?php echo $selected; ?>><?php echo htmlspecialchars($label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">تنسيق الوقت</label>
+                            <select name="time_format" class="form-select">
+                                <option value="24" <?php echo ($settings['time_format'] ?? '24') === '24' ? 'selected' : ''; ?>>24 ساعة (14:30)</option>
+                                <option value="12" <?php echo ($settings['time_format'] ?? '24') === '12' ? 'selected' : ''; ?>>12 ساعة (02:30 م)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">أول يوم في الأسبوع</label>
+                            <select name="first_day_of_week" class="form-select">
+                                <option value="sunday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'sunday' ? 'selected' : ''; ?>>الأحد</option>
+                                <option value="monday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'monday' ? 'selected' : ''; ?>>الإثنين</option>
+                                <option value="saturday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'saturday' ? 'selected' : ''; ?>>السبت</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch p-3 bg-light rounded-3 border">
+                                <input class="form-check-input" type="checkbox" name="auto_sync_time" id="auto_sync_time" <?php echo ($settings['auto_sync_time'] ?? 0) ? 'checked' : ''; ?>>
+                                <label class="form-check-label fw-bold" for="auto_sync_time">مزامنة الوقت تلقائياً</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-title"><i class="fas fa-user-clock text-primary"></i> إعدادات الحضور والانصراف المتقدمة</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">السماح بالحضور قبل وقت الدوام ب (دقائق)</label>
+                            <input type="number" name="attendance_early_minutes" class="form-control" value="<?php echo htmlspecialchars($settings['attendance_early_minutes'] ?? 15); ?>" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">السماح بالحضور بعد بداية الدوام ب (دقائق)</label>
+                            <input type="number" name="attendance_late_minutes" class="form-control" value="<?php echo htmlspecialchars($settings['attendance_late_minutes'] ?? 10); ?>" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">السماح بالانصراف قبل نهاية الدوام ب (دقائق)</label>
+                            <input type="number" name="departure_early_minutes" class="form-control" value="<?php echo htmlspecialchars($settings['departure_early_minutes'] ?? 10); ?>" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">السماح بالانصراف بعد نهاية الدوام ب (دقائق)</label>
+                            <input type="number" name="departure_late_minutes" class="form-control" value="<?php echo htmlspecialchars($settings['departure_late_minutes'] ?? 60); ?>" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch p-3 bg-light rounded-3 border">
+                                <input class="form-check-input" type="checkbox" name="prevent_outside_attendance" id="prevent_outside_attendance" <?php echo ($settings['prevent_outside_attendance'] ?? 0) ? 'checked' : ''; ?>>
+                                <label class="form-check-label fw-bold" for="prevent_outside_attendance">منع تسجيل الحضور والانصراف خارج الفترات المسموح بها</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-title"><i class="fas fa-users-cog text-primary"></i> إعدادات الجلسات</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch p-3 bg-light rounded-3 border">
+                                <input class="form-check-input" type="checkbox" name="allow_multiple_sessions" id="allow_multiple_sessions" <?php echo ($settings['allow_multiple_sessions'] ?? 0) ? 'checked' : ''; ?>>
+                                <label class="form-check-label fw-bold" for="allow_multiple_sessions">السماح بتعدد الجلسات (تسجيل الدخول من أجهزة متعددة)</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">سلوك الجلسات عند محاولة تسجيل الدخول من جهاز جديد</label>
+                            <select name="session_behavior" class="form-select">
+                                <option value="terminate_old" <?php echo ($settings['session_behavior'] ?? 'terminate_old') === 'terminate_old' ? 'selected' : ''; ?>>إنهاء الجلسة القديمة تلقائياً</option>
+                                <option value="reject_new" <?php echo ($settings['session_behavior'] ?? 'terminate_old') === 'reject_new' ? 'selected' : ''; ?>>رفض تسجيل الدخول الجديد</option>
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -2994,6 +3500,113 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                         </div>
                     </div>
                 </div>
+                
+                <!-- تبويب الوقت والتاريخ -->
+                <div class="tab-pane fade <?php echo ($active_tab === 'time_date') ? 'show active' : ''; ?>" id="time_date">
+                    <div class="section-title"><i class="fas fa-calendar-alt text-primary"></i> إعدادات الوقت والتاريخ</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-4">
+                            <label class="form-label">المنطقة الزمنية</label>
+                            <select name="timezone" class="form-select">
+                                <?php 
+                                $timezones = DateTimeZone::listIdentifiers();
+                                foreach ($timezones as $tz): ?>
+                                    <option value="<?php echo htmlspecialchars($tz); ?>" 
+                                        <?php echo ($settings['timezone'] ?? 'Asia/Riyadh') === $tz ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($tz); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">تنسيق التاريخ</label>
+                            <select name="date_format" class="form-select">
+                                <option value="Y-m-d" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'Y-m-d' ? 'selected' : ''; ?>>YYYY-MM-DD</option>
+                                <option value="d-m-Y" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'd-m-Y' ? 'selected' : ''; ?>>DD-MM-YYYY</option>
+                                <option value="m/d/Y" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'm/d/Y' ? 'selected' : ''; ?>>MM/DD/YYYY</option>
+                                <option value="d/m/Y" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'd/m/Y' ? 'selected' : ''; ?>>DD/MM/YYYY</option>
+                                <option value="F j, Y" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'F j, Y' ? 'selected' : ''; ?>>January 1, 2025</option>
+                                <option value="j F Y" <?php echo ($settings['date_format'] ?? 'Y-m-d') === 'j F Y' ? 'selected' : ''; ?>>1 January 2025</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">تنسيق الوقت</label>
+                            <select name="time_format" class="form-select">
+                                <option value="24" <?php echo ($settings['time_format'] ?? '24') === '24' ? 'selected' : ''; ?>>24 ساعة (14:30)</option>
+                                <option value="12" <?php echo ($settings['time_format'] ?? '24') === '12' ? 'selected' : ''; ?>>12 ساعة (2:30 PM)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">اليوم الأول من الأسبوع</label>
+                            <select name="first_day_of_week" class="form-select">
+                                <option value="sunday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'sunday' ? 'selected' : ''; ?>>الأحد</option>
+                                <option value="monday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'monday' ? 'selected' : ''; ?>>الإثنين</option>
+                                <option value="saturday" <?php echo ($settings['first_day_of_week'] ?? 'sunday') === 'saturday' ? 'selected' : ''; ?>>السبت</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-switch-container h-100">
+                                <div class="form-switch">
+                                    <label class="form-check-label small fw-bold">تحديث الوقت تلقائياً</label>
+                                    <input class="form-check-input" type="checkbox" name="auto_sync_time" <?php echo ($settings['auto_sync_time'] ?? 1) ? 'checked' : ''; ?>>
+                                </div>
+                                <small class="text-muted d-block mt-1">تزامن الوقت مع الخادم بشكل تلقائي</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-title"><i class="fas fa-clock text-success"></i> إعدادات الحضور والانصراف</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-3">
+                            <label class="form-label">دقائق مبكرة للحضور</label>
+                            <input type="number" name="attendance_early_minutes" class="form-control" 
+                                value="<?php echo htmlspecialchars($settings['attendance_early_minutes'] ?? 15); ?>" min="0">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">دقائق تأخير مسموح بها</label>
+                            <input type="number" name="attendance_late_minutes" class="form-control" 
+                                value="<?php echo htmlspecialchars($settings['attendance_late_minutes'] ?? 10); ?>" min="0">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">دقائق مبكرة للانصراف</label>
+                            <input type="number" name="departure_early_minutes" class="form-control" 
+                                value="<?php echo htmlspecialchars($settings['departure_early_minutes'] ?? 10); ?>" min="0">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">دقائق تأخير للانصراف</label>
+                            <input type="number" name="departure_late_minutes" class="form-control" 
+                                value="<?php echo htmlspecialchars($settings['departure_late_minutes'] ?? 60); ?>" min="0">
+                        </div>
+                        <div class="col-md-12">
+                            <div class="form-switch-container">
+                                <div class="form-switch">
+                                    <label class="form-check-label small fw-bold">منع تسجيل الحضور والانصراف خارج الأوقات المحددة</label>
+                                    <input class="form-check-input" type="checkbox" name="prevent_outside_attendance" <?php echo ($settings['prevent_outside_attendance'] ?? 1) ? 'checked' : ''; ?>>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-title"><i class="fas fa-users-cog text-info"></i> إعدادات الجلسات</div>
+                    <div class="row g-4 mb-5">
+                        <div class="col-md-4">
+                            <div class="form-switch-container h-100">
+                                <div class="form-switch">
+                                    <label class="form-check-label small fw-bold">السماح بجلسات متعددة للمستخدم</label>
+                                    <input class="form-check-input" type="checkbox" name="allow_multiple_sessions" <?php echo ($settings['allow_multiple_sessions'] ?? 0) ? 'checked' : ''; ?>>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">سلوك الجلسات عند تسجيل الدخول مرة أخرى</label>
+                            <select name="session_behavior" class="form-select">
+                                <option value="terminate_old" <?php echo ($settings['session_behavior'] ?? 'terminate_old') === 'terminate_old' ? 'selected' : ''; ?>>إنهاء الجلسات القديمة</option>
+                                <option value="reject_new" <?php echo ($settings['session_behavior'] ?? 'terminate_old') === 'reject_new' ? 'selected' : ''; ?>>رفض الجلسة الجديدة</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
                 <?php if (has_permission('passport_transactions_settings')): ?>
                     <div class="tab-pane fade" id="passport-pricing" role="tabpanel" aria-labelledby="passport-pricing-tab">
                         <div class="p-4">
@@ -3031,6 +3644,7 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                                             <thead class="bg-light">
                                                 <tr>
                                                     <th class="ps-4">اسم النوع</th>
+                                                    <th>الخدمة الرئيسية</th>
                                                     <th class="text-end">التكلفة الافتراضية</th>
                                                     <th class="text-end">البيع الافتراضي</th>
                                                     <th class="text-center">العملة</th>
@@ -3041,12 +3655,21 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                                             <tbody>
                                                 <?php foreach ($passport_transaction_types as $t): ?>
                                                     <tr>
-                                                        <td class="ps-4 fw-bold"><?php echo htmlspecialchars($t['type_name']); ?></td>
+                                                        <td class="ps-4 fw-bold"><?php echo htmlspecialchars($t['type_name'] ?? ''); ?></td>
+                                                        <td>
+                                                            <?php if ($t['service_name']): ?>
+                                                                <span class="badge bg-primary bg-opacity-10 text-primary rounded-pill px-3">
+                                                                    <?php echo htmlspecialchars($t['service_name'] ?? ''); ?>
+                                                                </span>
+                                                            <?php else: ?>
+                                                                <span class="text-muted small">---</span>
+                                                            <?php endif; ?>
+                                                        </td>
                                                         <td class="text-end"><?php echo number_format($t['default_cost'], 2); ?></td>
                                                         <td class="text-end fw-bold text-success"><?php echo number_format($t['default_sale_price'], 2); ?></td>
                                                         <td class="text-center">
                                                             <span class="badge bg-info bg-opacity-10 text-info rounded-pill px-3">
-                                                                <?php echo htmlspecialchars($t['currency_name'] ?: '---'); ?> (<?php echo htmlspecialchars($t['currency_symbol'] ?: ''); ?>)
+                                                                <?php echo htmlspecialchars($t['currency_name'] ?? '---'); ?> (<?php echo htmlspecialchars($t['currency_symbol'] ?? ''); ?>)
                                                             </span>
                                                         </td>
                                                         <td class="text-center">
@@ -3056,7 +3679,7 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                                                         </td>
                                                         <td class="pe-4 text-center">
                                                             <div class="btn-group">
-                                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="editType(<?php echo htmlspecialchars(json_encode($t)); ?>)">
+                                                                <button type="button" class="btn btn-sm btn-outline-primary" onclick='editType(<?php echo json_encode($t, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE); ?>)'>
                                                                     <i class="fas fa-edit"></i>
                                                                 </button>
                                                                 <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteType(<?php echo $t['id']; ?>, '<?php echo htmlspecialchars($t['type_name'], ENT_QUOTES); ?>')">
@@ -3086,16 +3709,16 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
 </div>
 
 <!-- Modal إضافة/تعديل -->
-<div class="modal fade" id="addTypeModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow-lg rounded-4">
+<div class="modal fade" id="addTypeModal" tabindex="-1" style="z-index: 99999;">
+    <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered" style="z-index:100000; max-height: 90vh;">
+        <div class="modal-content border-0 shadow-lg rounded-4" style="z-index:100001;">
             <div class="modal-header bg-primary text-white py-3 rounded-top-4">
                 <h5 class="modal-title fw-bold">إضافة نوع معاملة</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST">
                 <input type="hidden" name="id" id="edit_id">
-                <div class="modal-body p-4">
+                <div class="modal-body p-4" style="max-height: 70vh; overflow-y: auto;">
                     <div class="mb-3">
                         <label class="form-label small fw-bold">اسم النوع</label>
                         <input type="text" name="type_name" id="type_name" class="form-control rounded-3" required>
@@ -3115,7 +3738,18 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                         <select name="currency_id" id="type_currency_id" class="form-select rounded-3" required>
                             <?php foreach ($currencies_list as $curr): ?>
                                 <option value="<?php echo $curr['id']; ?>">
-                                    <?php echo htmlspecialchars($curr['currency_name']); ?> (<?php echo htmlspecialchars($curr['currency_symbol']); ?>)
+                                    <?php echo htmlspecialchars($curr['currency_name'] ?? ''); ?> (<?php echo htmlspecialchars($curr['currency_symbol'] ?? ''); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">الخدمة الرئيسية</label>
+                        <select name="service_id" id="type_service_id" class="form-select rounded-3">
+                            <option value="">اختر الخدمة...</option>
+                            <?php foreach ($services as $serv): ?>
+                                <option value="<?php echo $serv['id']; ?>">
+                                    <?php echo htmlspecialchars($serv['service_name'] ?? ''); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -3129,9 +3763,9 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                         <textarea name="print_terms" id="print_terms" class="form-control rounded-3" rows="4" placeholder="اكتب الشروط الخاصة بهذا النوع ليتم طباعتها في السند..."></textarea>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4">
-                    <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">إلغاء</button>
-                    <button type="submit" name="save_type" class="btn btn-primary rounded-pill px-4">حفظ</button>
+                <div class="modal-footer border-0 p-4" style="z-index:100002; background: white; border-top:1px solid #eee;">
+                    <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal" style="z-index:100003;">إلغاء</button>
+                    <button type="submit" name="save_type" class="btn btn-primary rounded-pill px-4" style="z-index:100004;">حفظ</button>
                 </div>
             </form>
         </div>
@@ -3165,27 +3799,61 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
     </div>
 </div>
 <script>
+    // Temporarily disabled for testing
+    // $(document).ready(function() {
+    //     $('.service-account-select').select2({
+    //         placeholder: "--- اختر حساب ---",
+    //         allowClear: true,
+    //         dir: "rtl",
+    //         dropdownAutoWidth: true
+    //     });
+    // });
+
     function addType() {
         $('#edit_id').val('');
         $('#type_name').val('');
         $('#default_cost').val('0');
         $('#default_sale_price').val('0');
         $('#type_currency_id').val($('#type_currency_id option:first').val());
+        $('#type_service_id').val('');
         $('#is_active').prop('checked', true);
+        $('#print_terms').val('');
         $('.modal-title').text('إضافة نوع معاملة');
-        $('#addTypeModal').modal('show');
+        
+        // Show modal using Bootstrap's JS
+        const modalElement = document.getElementById('addTypeModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     function editType(data) {
+        // Reset everything first
+        $('#edit_id').val('');
+        $('#type_name').val('');
+        $('#default_cost').val('0');
+        $('#default_sale_price').val('0');
+        $('#type_currency_id').val($('#type_currency_id option:first').val());
+        $('#type_service_id').val('');
+        $('#is_active').prop('checked', true);
+        $('#print_terms').val('');
+        
+        // Now set the values
         $('#edit_id').val(data.id);
         $('#type_name').val(data.type_name);
         $('#default_cost').val(data.default_cost);
         $('#default_sale_price').val(data.default_sale_price);
         $('#type_currency_id').val(data.currency_id);
+        $('#type_service_id').val(data.service_id || '');
         $('#is_active').prop('checked', data.is_active == 1);
         $('#print_terms').val(data.print_terms || '');
+        
+        // Set title
         $('.modal-title').text('تعديل نوع معاملة');
-        $('#addTypeModal').modal('show');
+        
+        // Show modal using Bootstrap's JS
+        const modalElement = document.getElementById('addTypeModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     function deleteType(id, name) {
@@ -3309,6 +3977,10 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                             <label class="form-label fw-bold small">العنوان الوطني</label>
                             <textarea name="national_address" id="host_national_input" class="form-control rounded-3" rows="2"></textarea>
                         </div>
+                        <div class="col-md-12">
+                            <label class="form-label fw-bold small">الحد الأقصى للمعتمرين</label>
+                            <input type="number" name="max_muatamers" id="host_max_muatamers_input" class="form-control rounded-3" value="5" min="1">
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer bg-light border-0">
@@ -3402,9 +4074,20 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                                 <option value="inactive">معطل</option>
                             </select>
                         </div>
-                        <div class="col-md-12">
-                            <label class="form-label fw-bold">المتطلبات (كل متطلب في سطر)</label>
-                            <textarea name="requirements[]" id="prof_requirements" class="form-control rounded-3" rows="4" placeholder="مثال: صورة الجواز، صورة الشخص، صورة الصادر..."></textarea>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">المتطلبات العامة</label>
+                            <textarea id="prof_requirements_general" class="form-control rounded-3" rows="5" placeholder="مثال: صورة الجواز، صورة الشخص، صورة الصادر..."></textarea>
+                            <small class="text-muted">تظهر للجميع بغض النظر عن الجنس.</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">متطلبات الذكور</label>
+                            <textarea id="prof_requirements_male" class="form-control rounded-3" rows="5" placeholder="متطلبات خاصة بالذكر فقط"></textarea>
+                            <small class="text-muted">تظهر فقط عند اختيار الجنس: ذكر.</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold">متطلبات الإناث</label>
+                            <textarea id="prof_requirements_female" class="form-control rounded-3" rows="5" placeholder="متطلبات خاصة بالأنثى فقط"></textarea>
+                            <small class="text-muted">تظهر فقط عند اختيار الجنس: أنثى.</small>
                         </div>
                         <div class="col-12 mt-4">
                             <h6 class="fw-bold border-bottom pb-2"><i class="fas fa-gavel me-2 text-primary"></i> قواعد التحقق التلقائي</h6>
@@ -3573,6 +4256,21 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                     });
             });
         }
+        
+        const addHostModalEl = document.getElementById('addHostModal');
+        if (addHostModalEl) {
+            addHostModalEl.addEventListener('show.bs.modal', function (e) {
+                const button = e.relatedTarget;
+                if (!button.classList.contains('edit-host')) {
+                    document.getElementById('host_id_edit').value = '';
+                    document.getElementById('host_name_input').value = '';
+                    document.getElementById('host_phone_input').value = '';
+                    document.getElementById('host_address_input').value = '';
+                    document.getElementById('host_national_input').value = '';
+                    document.getElementById('host_max_muatamers_input').value = <?php echo $settings['umrah_default_max_muatamers'] ?? 5; ?>;
+                }
+            });
+        }
 
         document.querySelectorAll('.edit-host').forEach(btn => {
             btn.addEventListener('click', function() {
@@ -3582,6 +4280,7 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                 document.getElementById('host_phone_input').value = data.phone;
                 document.getElementById('host_address_input').value = data.address;
                 document.getElementById('host_national_input').value = data.national_address;
+                document.getElementById('host_max_muatamers_input').value = data.max_muatamers || <?php echo $settings['umrah_default_max_muatamers'] ?? 5; ?>;
                 new bootstrap.Modal(document.getElementById('addHostModal')).show();
             });
         });
@@ -3681,9 +4380,14 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                 e.preventDefault();
                 const formData = new FormData(this);
                 formData.append('csrf_token', SETTINGS_CSRF_TOKEN);
-                const reqs = document.getElementById('prof_requirements').value.split('\n').filter(r => r.trim() !== '');
+                const mapRequirements = (fieldId, key) => {
+                    const lines = document.getElementById(fieldId).value.split('\n').filter(r => r.trim() !== '');
+                    lines.forEach(line => formData.append(key, line));
+                };
                 formData.delete('requirements[]');
-                reqs.forEach(r => formData.append('requirements[]', r));
+                mapRequirements('prof_requirements_general', 'requirements_general[]');
+                mapRequirements('prof_requirements_male', 'requirements_male[]');
+                mapRequirements('prof_requirements_female', 'requirements_female[]');
 
                 fetch('ajax_work_visa_settings.php?action=save_profession', {
                         method: 'POST',
@@ -3707,7 +4411,9 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                         document.getElementById('prof_name_ar').value = data.name_ar;
                         document.getElementById('prof_code').value = data.code;
                         document.getElementById('prof_status').value = data.status;
-                        document.getElementById('prof_requirements').value = data.requirements.join('\n');
+                        document.getElementById('prof_requirements_general').value = (data.requirements_general || []).join('\n');
+                        document.getElementById('prof_requirements_male').value = (data.requirements_male || []).join('\n');
+                        document.getElementById('prof_requirements_female').value = (data.requirements_female || []).join('\n');
                         if (data.rules) {
                             document.getElementById('prof_min_age').value = data.rules.min_age;
                             document.getElementById('prof_max_age').value = data.rules.max_age;
@@ -3735,6 +4441,15 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
                             if (data.status === 'success') location.reload();
                         });
                 }
+            });
+        });
+
+        // Initialize Select2 for service account selects
+        $(document).ready(function() {
+            $('.service-account-select').select2({
+                placeholder: "--- اختر حساب ---",
+                allowClear: true,
+                dir: "rtl"
             });
         });
 
@@ -4067,8 +4782,41 @@ RewriteRule ^(.*)$ https://%1/$1 [R=301,L]</pre>
     $(document).ready(function() {
         // إظهار رسالة عند حفظ الإعدادات
         $('form').on('submit', function() {
+            const form = this;
+            if ($(form).find('.btn-save').length && !$(form).find('input[name="update_settings"]').length) {
+                const activePane = $(form).find('.tab-pane.active').first();
+                $(form).find('input[name="__submitted_settings[]"]').remove();
+
+                if (activePane.length) {
+                    const names = new Set();
+                    activePane.find('input[name], select[name], textarea[name]').each(function() {
+                        const name = this.name;
+                        if (!name || name.endsWith('[]') || name === 'active_tab' || name === 'update_settings') {
+                            return;
+                        }
+                        names.add(name);
+                    });
+
+                    names.forEach(function(name) {
+                        $('<input>', {
+                            type: 'hidden',
+                            name: '__submitted_settings[]',
+                            value: name
+                        }).appendTo(form);
+                    });
+
+                    $(form).find('.tab-pane').not(activePane).find('input, select, textarea, button').prop('disabled', true);
+                }
+
+                $('<input>', {
+                    type: 'hidden',
+                    name: 'update_settings',
+                    value: '1'
+                }).appendTo(form);
+            }
+
             // إضافة مؤشر تحميل
-            $('.btn-save').html('<i class="fas fa-spinner fa-spin me-2"></i> جاري الحفظ...').prop('disabled', true);
+            $(form).find('.btn-save').html('<i class="fas fa-spinner fa-spin me-2"></i> جاري الحفظ...').prop('disabled', true);
         });
 
         // عند العودة من حفظ الإعدادات، إظهار رسالة نجاح

@@ -8,18 +8,28 @@ if($user_role === 'editor' && !$settings['allow_editor_messages']) {
     exit();
 }
 
+if (isset($_GET['delete']) || isset($_GET['read'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات المباشرة عبر الرابط. استخدم أزرار الصفحة المحمية فقط.";
+}
+
 // معالجة الحذف
-if(isset($_GET['delete'])) {
+if(isset($_POST['delete_message'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='messages.php';</script>");
+    }
     $stmt = $pdo->prepare("DELETE FROM contact_messages WHERE id = ?");
-    $stmt->execute([$_GET['delete']]);
+    $stmt->execute([(int)$_POST['delete_message']]);
     echo "<script>window.location.href='messages.php?status=deleted';</script>";
     exit;
 }
 
 // معالجة القراءة
-if(isset($_GET['read'])) {
+if(isset($_POST['mark_read'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='messages.php';</script>");
+    }
     $stmt = $pdo->prepare("UPDATE contact_messages SET is_read = 1 WHERE id = ?");
-    $stmt->execute([$_GET['read']]);
+    $stmt->execute([(int)$_POST['mark_read']]);
     echo "<script>window.location.href='messages.php?status=read';</script>";
     exit;
 }
@@ -40,6 +50,12 @@ $messages = $pdo->query("SELECT * FROM contact_messages ORDER BY created_at DESC
                 if($_GET['status'] == 'deleted') echo "تم حذف الرسالة بنجاح.";
                 if($_GET['status'] == 'read') echo "تم تحديد الرسالة كمقروءة.";
             ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    <?php endif; ?>
+    <?php if(isset($error)): ?>
+        <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm mb-4" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i><?php echo $error; ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
     <?php endif; ?>
@@ -102,13 +118,21 @@ $messages = $pdo->query("SELECT * FROM contact_messages ORDER BY created_at DESC
                                         <i class="fas fa-eye text-info"></i>
                                     </button>
                                     <?php if(!$msg['is_read']): ?>
-                                    <a href="messages.php?read=<?php echo $msg['id']; ?>" class="btn btn-white btn-sm px-3 border-end" title="تحديد كمقروءة">
-                                        <i class="fas fa-check text-success"></i>
-                                    </a>
+                                    <form method="POST" class="d-inline-block mb-0">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="mark_read" value="<?php echo $msg['id']; ?>">
+                                        <button type="submit" class="btn btn-white btn-sm px-3 border-end" title="تحديد كمقروءة">
+                                            <i class="fas fa-check text-success"></i>
+                                        </button>
+                                    </form>
                                     <?php endif; ?>
-                                    <a href="javascript:void(0)" onclick="confirmDelete(<?php echo $msg['id']; ?>)" class="btn btn-white btn-sm px-3" title="حذف">
-                                        <i class="fas fa-trash text-danger"></i>
-                                    </a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذه الرسالة نهائياً؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_message" value="<?php echo $msg['id']; ?>">
+                                        <button type="submit" class="btn btn-white btn-sm px-3" title="حذف">
+                                            <i class="fas fa-trash text-danger"></i>
+                                        </button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -148,7 +172,11 @@ $messages = $pdo->query("SELECT * FROM contact_messages ORDER BY created_at DESC
                                     <div class="modal-footer border-0 bg-light p-3">
                                         <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">إغلاق</button>
                                         <?php if(!$msg['is_read']): ?>
-                                            <a href="messages.php?read=<?php echo $msg['id']; ?>" class="btn btn-primary rounded-pill px-4">تحديد كمقروءة</a>
+                                            <form method="POST" class="d-inline-block mb-0">
+                                                <?php echo csrf_input(); ?>
+                                                <input type="hidden" name="mark_read" value="<?php echo $msg['id']; ?>">
+                                                <button type="submit" class="btn btn-primary rounded-pill px-4">تحديد كمقروءة</button>
+                                            </form>
                                         <?php endif; ?>
                                     </div>
                                 </div>
@@ -169,13 +197,5 @@ $messages = $pdo->query("SELECT * FROM contact_messages ORDER BY created_at DESC
     .btn-white:hover { background: #f8f9fa; }
     .avatar-sm { flex-shrink: 0; }
 </style>
-
-<script>
-function confirmDelete(id) {
-    if(confirm('هل أنت متأكد من حذف هذه الرسالة نهائياً؟')) {
-        window.location.href = 'messages.php?delete=' + id;
-    }
-}
-</script>
 
 <?php require_once 'footer.php'; ?>

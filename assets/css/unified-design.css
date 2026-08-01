@@ -511,6 +511,31 @@ small,
     border-color: rgba(0, 122, 255, 0.2) !important;
 }
 
+body.theme-dark .perm-card,
+body.dark-mode .perm-card,
+body.theme-dark .form-switch-container,
+body.dark-mode .form-switch-container {
+    background: var(--ui-surface) !important;
+    border-color: var(--ui-border) !important;
+    color: var(--ui-text) !important;
+}
+
+body.theme-dark .perm-card:hover,
+body.dark-mode .perm-card:hover,
+body.theme-dark .form-switch-container:hover,
+body.dark-mode .form-switch-container:hover {
+    border-color: #365078 !important;
+    box-shadow: var(--ui-shadow-sm) !important;
+}
+
+body.theme-dark .perm-card.is-active,
+body.dark-mode .perm-card.is-active,
+body.theme-dark .form-switch-container:has(.form-check-input:checked),
+body.dark-mode .form-switch-container:has(.form-check-input:checked) {
+    background: #0f1e35 !important;
+    border-color: rgba(59, 130, 246, 0.45) !important;
+}
+
 .modal-content {
     max-height: calc(100vh - 48px);
     overflow: hidden;

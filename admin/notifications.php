@@ -59,9 +59,9 @@ $total_notifs = $stmt_count->fetchColumn();
 $total_pages = ceil($total_notifs / $limit);
 
 $stmt = $pdo->prepare("
-    SELECT * FROM notifications
+    SELECT n.* FROM notifications n
     WHERE $where_clause $filter_clause
-    ORDER BY is_read ASC, created_at DESC
+    ORDER BY n.is_read ASC, n.created_at DESC
     LIMIT ? OFFSET ?
 ");
 $params[] = $limit;
@@ -111,12 +111,29 @@ if (isset($_GET['notif_id'])) {
                                 <?php
                                 // تحديد الرابط المناسب
                                 $link = htmlspecialchars($notif['link']) ?: '#';
-                                if (strpos($notif['title'], 'معاملة') !== false || strpos($notif['message'], 'معاملة') !== false) {
-                                    $link = 'passports.php';
-                                } elseif (strpos($notif['title'], 'تأشيرة') !== false || strpos($notif['message'], 'تأشيرة') !== false) {
-                                    $link = 'work_visa.php';
-                                } elseif (strpos($notif['title'], 'حجز') !== false || strpos($notif['message'], 'حجز') !== false) {
-                                    $link = 'bus_flight_bookings.php';
+                                
+                                // تحديد الرابط بناءً على source_type
+                                if (isset($notif['source_type'])) {
+                                    switch ($notif['source_type']) {
+                                        case 'flight_booking':
+                                        case 'bus_booking':
+                                            $link = 'bus_flight_bookings.php';
+                                            break;
+                                        case 'passport_travel':
+                                            $link = 'passport_transactions.php';
+                                            break;
+                                    }
+                                }
+                                
+                                // الاحتيال القديم كحالة احتياطية
+                                if ($link === '#') {
+                                    if (strpos($notif['title'], 'معاملة') !== false || strpos($notif['message'], 'معاملة') !== false) {
+                                        $link = 'passports.php';
+                                    } elseif (strpos($notif['title'], 'تأشيرة') !== false || strpos($notif['message'], 'تأشيرة') !== false) {
+                                        $link = 'work_visa.php';
+                                    } elseif (strpos($notif['title'], 'حجز') !== false || strpos($notif['message'], 'حجز') !== false) {
+                                        $link = 'bus_flight_bookings.php';
+                                    }
                                 }
 
                                 // تحديد الأيقونة حسب النوع

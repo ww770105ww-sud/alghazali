@@ -1,5 +1,7 @@
 <?php
+require_once 'session_config.php';
 require_once 'CurrencyExchange.php';
+require_once __DIR__ . '/functions.php';
 
 // Initialize currency exchange when needed
 function get_currency_exchange($pdo) {
@@ -26,8 +28,96 @@ function get_base_currency($pdo) {
  * النسخة النهائية الموحدة المتوافقة مع الإجراءات المخزنة الجديدة
  */
 
-if (session_status() === PHP_SESSION_NONE && PHP_SAPI !== 'cli') {
-    session_start();
+function balances_triggers_enabled(PDO $pdo): bool
+{
+    try {
+        $stmt = $pdo->query("
+            SELECT COUNT(*) 
+            FROM information_schema.TRIGGERS
+            WHERE TRIGGER_SCHEMA = DATABASE()
+              AND TRIGGER_NAME IN ('trg_journal_lines_after_insert', 'trg_journal_lines_after_update', 'trg_journal_lines_after_delete')
+        ");
+        return (int)$stmt->fetchColumn() > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function apply_transaction_balances(PDO $pdo, int $financialTransactionId, int $direction = 1): void
+{
+    $financialTransactionId = (int)$financialTransactionId;
+    if ($financialTransactionId < 1) {
+        return;
+    }
+    $direction = $direction >= 0 ? 1 : -1;
+
+    // First get the branch_id from financial_transactions
+    $stmt_branch = $pdo->prepare("SELECT COALESCE(branch_id, 1) as branch_id FROM financial_transactions WHERE id = ?");
+    $stmt_branch->execute([$financialTransactionId]);
+    $branch_id = $stmt_branch->fetchColumn() ?: 1;
+
+    $stmt = $pdo->prepare("
+        SELECT
+            jl.account_id,
+            jl.currency_id,
+            CASE 
+                WHEN COALESCE(ua.normal_balance, 'debit') = 'credit' 
+                THEN SUM(COALESCE(jl.credit, 0) - COALESCE(jl.debit, 0)) 
+                ELSE SUM(COALESCE(jl.debit, 0) - COALESCE(jl.credit, 0)) 
+            END AS delta_amount,
+            COALESCE(MAX(c.exchange_rate), 1.0) AS exchange_rate
+        FROM journal_lines jl
+        INNER JOIN financial_transactions ft ON ft.id = jl.financial_transaction_id
+        LEFT JOIN currencies c ON c.id = jl.currency_id
+        LEFT JOIN unified_accounts ua ON ua.id = jl.account_id
+        WHERE jl.financial_transaction_id = ?
+        GROUP BY jl.account_id, jl.currency_id
+    ");
+    $stmt->execute([$financialTransactionId]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    if (!$rows) {
+        return;
+    }
+
+    $sqlWithLastUpdated = "
+        INSERT INTO account_balances_unified (
+            account_id, branch_id, currency_id,
+            opening_balance, current_balance, current_balance_base,
+            last_updated
+        ) VALUES (?, ?, ?, 0, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+            current_balance = current_balance + VALUES(current_balance),
+            current_balance_base = current_balance_base + VALUES(current_balance_base),
+            last_updated = NOW()
+    ";
+    $sqlWithoutLastUpdated = "
+        INSERT INTO account_balances_unified (
+            account_id, branch_id, currency_id,
+            opening_balance, current_balance, current_balance_base
+        ) VALUES (?, ?, ?, 0, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            current_balance = current_balance + VALUES(current_balance),
+            current_balance_base = current_balance_base + VALUES(current_balance_base)
+    ";
+
+    try {
+        $ins = $pdo->prepare($sqlWithLastUpdated);
+        foreach ($rows as $r) {
+            $delta = (float)($r['delta_amount'] ?? 0) * $direction;
+            $rate = (float)($r['exchange_rate'] ?? 1.0);
+            $deltaBase = $delta * $rate;
+            $ins->execute([(int)$r['account_id'], $branch_id, (int)$r['currency_id'], $delta, $deltaBase]);
+        }
+    } catch (Throwable $e) {
+        $ins = $pdo->prepare($sqlWithoutLastUpdated);
+        foreach ($rows as $r) {
+            $delta = (float)($r['delta_amount'] ?? 0) * $direction;
+            $rate = (float)($r['exchange_rate'] ?? 1.0);
+            $deltaBase = $delta * $rate;
+            $ins->execute([(int)$r['account_id'], $branch_id, (int)$r['currency_id'], $delta, $deltaBase]);
+        }
+    }
 }
 
 /**
@@ -117,24 +207,35 @@ function generate_unified_number($pdo, $type, $service_type = null)
     // جلب الإعدادات بناءً على الخدمة
     if ($service_type) {
         $srv_map = [
-            'النقل البري' => 'flight',
-            'تذاكر طيران وبصات' => 'flight',
-            'الطيران' => 'flight',
-            'bus' => 'flight',
-            'flight' => 'flight',
-            'تأشيرة عمل' => 'work_visa',
-            'work_visa' => 'work_visa',
-            'قسم العمرة' => 'umrah',
-            'زيارة عائلية' => 'family_visit',
-            'الزيارة العائلية' => 'family_visit',
-            'family_visit' => 'family_visit',
-            'معاملات الجوازات' => 'passport'
+            'النقل البري' => ['bus'],
+            'تذاكر طيران وبصات' => ['flight'],
+            'حجوزات الباصات والطيران' => ['flight'],
+            'الطيران' => ['flight'],
+            'حجوزات الطيران' => ['flight'],
+            'حجوزات الباصات' => ['bus'],
+            'bus' => ['bus'],
+            'flight' => ['flight'],
+            'تأشيرة عمل' => ['work_visa'],
+            'work_visa' => ['work_visa'],
+            'قسم العمرة' => ['umrah'],
+            'زيارة عائلية' => ['family_visit'],
+            'الزيارة العائلية' => ['family_visit'],
+            'family_visit' => ['family_visit'],
+            'معاملات الجوازات' => ['passport'],
+            'passport' => ['passport']
         ];
 
-        $srv_key = $srv_map[$service_type] ?? null;
-        if ($srv_key) {
-            $prefix = get_setting("srv_{$srv_key}_" . ($type == 'purchase' ? 'purchase' : 'sales') . "_prefix");
-            $digits = get_setting("srv_{$srv_key}_digits", 6);
+        $srv_keys = $srv_map[$service_type] ?? [];
+        foreach ($srv_keys as $srv_key) {
+            $candidatePrefix = get_setting("srv_{$srv_key}_" . ($type == 'purchase' ? 'purchase' : 'sales') . "_prefix");
+            $candidateDigits = get_setting("srv_{$srv_key}_digits", null);
+
+            if (!empty($candidatePrefix)) {
+                $prefix = $candidatePrefix;
+            }
+            if (!empty($candidateDigits)) {
+                $digits = (int)$candidateDigits;
+            }
         }
     }
 
@@ -171,6 +272,7 @@ function php_create_invoice(
     $cost_amount = 0,
     $payment_type = 'cash',
     $description = '',
+    $invoice_date = null,
     $created_by = null,
     $agent_id = null,
     $branch_entity_id = null,
@@ -178,7 +280,7 @@ function php_create_invoice(
 ) {
     try {
         // التحقق من إغلاق الفترة المالية
-        $invoice_date = date('Y-m-d');
+        $invoice_date = normalize_datetime_db($invoice_date, 'now');
         if (is_period_closed($pdo, $invoice_date)) {
             throw new Exception("تنبيه: لا يمكن إنشاء الفاتورة. التاريخ المحدد ($invoice_date) يقع ضمن فترة مالية مغلقة.");
         }
@@ -223,7 +325,7 @@ function php_create_invoice(
 
         $invoice_id = $pdo->query("SELECT @invoice_id")->fetchColumn();
 
-        // جلب حساب العميل أو المورد إذا لم يكن محدداً
+        // جلب حساب العميل أو المورد، مع fallback للحساب المختار في التدفقات legacy
         $customer_account_id = null;
         $supplier_account_id = null;
         if ($customer_id) {
@@ -237,15 +339,36 @@ function php_create_invoice(
             $supplier_account_id = $stmt->fetchColumn() ?: null;
         }
 
+        if (!$customer_account_id && $category == 'sales' && in_array($payment_type, ['credit', 'credit_doc', 'on_account'], true) && $branch_entity_id) {
+            $customer_account_id = $branch_entity_id;
+        }
+
         // تحديث الحسابات في الفاتورة
-        $update_sql = "UPDATE invoices SET account_id = ?, customer_account_id = ?, supplier_account_id = ? WHERE id = ?";
+        $update_sql = "
+            UPDATE invoices
+            SET invoice_date = ?,
+                account_id = ?,
+                customer_account_id = ?,
+                supplier_account_id = ?,
+                delivery_type = ?,
+                payment_type = ?
+            WHERE id = ?
+        ";
         $account_id_for_update = null;
         if ($category == 'sales') {
             $account_id_for_update = $customer_account_id ?: $branch_entity_id;
         } else {
             $account_id_for_update = $supplier_account_id ?: $branch_entity_id;
         }
-        $pdo->prepare($update_sql)->execute([$account_id_for_update, $customer_account_id, $supplier_account_id, $invoice_id]);
+        $pdo->prepare($update_sql)->execute([
+            $invoice_date,
+            $account_id_for_update,
+            $customer_account_id,
+            $supplier_account_id,
+            $payment_type,
+            $payment_type,
+            $invoice_id
+        ]);
 
         // الفاتورة تبقى في وضع المسودة - الترحيل يدوي لاحقاً
         return $invoice_id;
@@ -276,6 +399,39 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
             throw new Exception("الفاتورة مُرحلة بالفعل");
         }
 
+        $stmt_existing = $pdo->prepare("
+            SELECT id, status
+            FROM financial_transactions
+            WHERE reference_type = 'invoice'
+              AND reference_id = ?
+              AND status IN ('draft', 'posted')
+            LIMIT 1
+        ");
+        $stmt_existing->execute([$invoice_id]);
+        $existing_transaction = $stmt_existing->fetch(PDO::FETCH_ASSOC);
+        if ($existing_transaction) {
+            if ($existing_transaction['status'] === 'posted') {
+                throw new Exception("توجد حركة مالية سابقة مرتبطة بهذه الفاتورة، ولا يمكن ترحيلها مرة أخرى");
+            }
+
+            $stmt_existing_lines = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE financial_transaction_id = ?");
+            $stmt_existing_lines->execute([$existing_transaction['id']]);
+            $existing_lines_count = (int)$stmt_existing_lines->fetchColumn();
+
+            if ($existing_lines_count > 0) {
+                throw new Exception("توجد حركة مسودة مرتبطة بهذه الفاتورة وما زالت تحتوي على قيود يومية، يرجى مراجعتها قبل إعادة الترحيل");
+            }
+
+            // Clean up legacy draft transactions left behind by invoice reset/unpost.
+            $pdo->prepare("
+                UPDATE financial_transactions
+                SET status = 'cancelled',
+                    updated_at = CURRENT_TIMESTAMP,
+                    updated_by = ?
+                WHERE id = ?
+            ")->execute([$user_id, $existing_transaction['id']]);
+        }
+
         // جلب الإعدادات
         $settings = [];
         $stmt_settings = $pdo->query("SELECT setting_key, setting_value FROM system_settings");
@@ -285,6 +441,24 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
 
         // جلب تكوين الخدمة لحساب الإيرادات/التكاليف/الأرباح
         $srv_config = getServiceInvoiceConfig($invoice['source_type'], $settings);
+        
+        // تحقق من جدول الخدمات لحسابات محددة للخدمة
+        if (!empty($invoice['source_type'])) {
+            $serviceStmt = $pdo->prepare("
+                SELECT revenue_account_id, cost_account_id, profit_account_id
+                FROM services
+                WHERE service_name = ?
+                LIMIT 1
+            ");
+            $serviceStmt->execute([$invoice['source_type']]);
+            $serviceCfg = $serviceStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            
+            foreach (['revenue_account_id', 'cost_account_id', 'profit_account_id'] as $accountKey) {
+                if (!empty($serviceCfg[$accountKey])) {
+                    $srv_config[$accountKey] = (int)$serviceCfg[$accountKey];
+                }
+            }
+        }
         
         // التحقق من الحدود المالية قبل الترحيل
         if ($invoice['customer_id']) {
@@ -308,13 +482,31 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
         $pdo->prepare("UPDATE invoices SET invoice_status = 'posted', posted_by = ?, posted_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$user_id, $invoice_id]);
 
         // 2. إنشاء المعاملة المالية والقيود اليومية
-        $invoice_date = $invoice['invoice_date'] ?? date('Y-m-d');
+        $invoice_date = normalize_datetime_db($invoice['invoice_date'] ?? null, 'now');
         $description = $invoice['description'] ?? 'فاتورة ' . ($invoice['invoice_category'] == 'sales' ? 'بيع' : 'شراء') . ' رقم ' . $invoice['invoice_number'];
 
         // --- لفواتير البيع ---
         if ($invoice['invoice_category'] == 'sales') {
             // جلب حسابات الخدمة (الإيرادات فقط - تكاليف وأرباح ترحل مع فاتورة الشراء)
             $revenue_account_id = $srv_config['revenue_account_id'] ?? ($settings['default_sales_account_id'] ?? null);
+            
+            // إذا لم يتم العثور على حساب إيرادات، احصل على أول حساب إيرادات نشط
+            if (empty($revenue_account_id)) {
+                $stmt_rev = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 AND (account_type LIKE '%revenue%' OR account_name_ar LIKE '%إيرادات%' OR account_code LIKE '4%') LIMIT 1");
+                $stmt_rev->execute();
+                $revenue_account_id = $stmt_rev->fetchColumn();
+                
+                // إذا لم يوجد حساب إيرادات، استخدم أول حساب نشط
+                if (empty($revenue_account_id)) {
+                    $stmt_rev = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 LIMIT 1");
+                    $stmt_rev->execute();
+                    $revenue_account_id = $stmt_rev->fetchColumn();
+                }
+                
+                if (empty($revenue_account_id)) {
+                    throw new Exception("لم يتم العثور على حساب إيرادات صالح للترحيل.");
+                }
+            }
             
             // جلب حساب العميل أو الوكيل أو الفرع أو الصندوق/البنك
             $party_account_id = null;
@@ -331,6 +523,26 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
             } elseif ($invoice['account_id']) {
                 // Fallback: use account_id from invoice if it's a customer/agent account
                 $party_account_id = $invoice['account_id'];
+            }
+            
+            // إذا لم يتم العثور على حساب العميل، انشئ حسابًا تلقائيًا أو استخدم أول حساب مدين نشط
+            if (empty($party_account_id)) {
+                if ($invoice['customer_id']) {
+                    $party_account_id = php_handle_entity_account_creation($pdo, 'customer', $invoice['customer_id'], 'عميل افتراضي');
+                } elseif ($invoice['agent_id']) {
+                    $party_account_id = php_handle_entity_account_creation($pdo, 'agent', $invoice['agent_id'], 'وكيل افتراضي');
+                }
+            }
+            
+            // إذا لم يكن هناك حساب بعد، استخدم أول حساب مدين نشط
+            if (empty($party_account_id)) {
+                $stmt_party = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 AND normal_balance = 'debit' LIMIT 1");
+                $stmt_party->execute();
+                $party_account_id = $stmt_party->fetchColumn();
+            }
+            
+            if (empty($party_account_id)) {
+                throw new Exception("لم يتم العثور على حساب عميل/وكيل صالح للترحيل.");
             }
             
             $cash_bank_account_id = $invoice['account_id'];
@@ -376,6 +588,13 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
                 $stmt_jrl = $pdo->prepare("INSERT INTO journal_lines (financial_transaction_id, account_id, debit, credit, currency_id, branch_id, description) VALUES (?, ?, 0, ?, ?, ?, ?)");
                 $stmt_jrl->execute([$trx_id, $revenue_account_id, $net_amount, $invoice['currency_id'], $invoice['branch_id'], 'إيرادات فاتورة بيع']);
             }
+
+            // التحقق من توازن القيد قبل تطبيق الأرصدة
+            validate_journal_balance($pdo, (int)$trx_id);
+
+            if (!balances_triggers_enabled($pdo)) {
+                apply_transaction_balances($pdo, (int)$trx_id, 1);
+            }
         }
         // --- لفواتير الشراء ---
         else {
@@ -388,9 +607,43 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
                 $stmt_supp->execute([$invoice['supplier_id']]);
                 $party_account_id = $stmt_supp->fetchColumn();
             }
+            
+            // إذا لم يتم العثور على حساب مورد، انشئ حسابًا تلقائيًا أو استخدم أول حساب مورد
+            if (empty($party_account_id) && $invoice['supplier_id']) {
+                $party_account_id = php_handle_entity_account_creation($pdo, 'supplier', $invoice['supplier_id'], 'مورد افتراضي');
+            }
+            
+            // إذا لم يكن هناك حساب بعد، استخدم أول حساب دائن نشط
+            if (empty($party_account_id)) {
+                $stmt_party = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 AND normal_balance = 'credit' LIMIT 1");
+                $stmt_party->execute();
+                $party_account_id = $stmt_party->fetchColumn();
+            }
+            
+            if (empty($party_account_id)) {
+                throw new Exception("لم يتم العثور على حساب مورد صالح للترحيل.");
+            }
 
             // جلب حساب التكاليف للخدمة
             $cost_account_id = $srv_config['cost_account_id'] ?? ($settings['default_cost_account_id'] ?? null);
+            
+            // إذا لم يتم العثور على حساب تكاليف، احصل على أول حساب تكاليف نشط
+            if (empty($cost_account_id)) {
+                $stmt_cost = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 AND (account_type LIKE '%cost%' OR account_type LIKE '%expense%' OR account_name_ar LIKE '%تكاليف%' OR account_name_ar LIKE '%مصروف%' OR account_code LIKE '5%' OR account_code LIKE '6%') LIMIT 1");
+                $stmt_cost->execute();
+                $cost_account_id = $stmt_cost->fetchColumn();
+                
+                // إذا لم يوجد حساب تكاليف، استخدم أول حساب نشط
+                if (empty($cost_account_id)) {
+                    $stmt_cost = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_status = 1 LIMIT 1");
+                    $stmt_cost->execute();
+                    $cost_account_id = $stmt_cost->fetchColumn();
+                }
+                
+                if (empty($cost_account_id)) {
+                    throw new Exception("لم يتم العثور على حساب تكاليف صالح للترحيل.");
+                }
+            }
             
             $total_amount = (float)$invoice['total_amount'];
             
@@ -414,12 +667,21 @@ function php_post_invoice($pdo, $invoice_id, $posted_by = null, $use_outer_trans
                 $stmt_jrl = $pdo->prepare("INSERT INTO journal_lines (financial_transaction_id, account_id, debit, credit, currency_id, branch_id, description) VALUES (?, ?, 0, ?, ?, ?, ?)");
                 $stmt_jrl->execute([$trx_id, $party_account_id, $total_amount, $invoice['currency_id'], $invoice['branch_id'], 'مديونية للمورد']);
             }
+
+
+            // التحقق من توازن القيد قبل تطبيق الأرصدة
+            validate_journal_balance($pdo, (int)$trx_id);
+
+            if (!balances_triggers_enabled($pdo)) {
+                apply_transaction_balances($pdo, (int)$trx_id, 1);
+            }
         }
 
         if (!$use_outer_transaction) {
             $pdo->commit();
         }
         return true;
+
     } catch (Exception $e) {
         if (!$use_outer_transaction && $pdo->inTransaction()) {
             $pdo->rollBack();
@@ -446,6 +708,7 @@ function php_create_invoice_and_post(
     $cost_amount = 0,
     $payment_type = 'cash',
     $description = '',
+    $invoice_date = null,
     $created_by = null,
     $agent_id = null,
     $branch_entity_id = null,
@@ -465,6 +728,7 @@ function php_create_invoice_and_post(
         $cost_amount,
         $payment_type,
         $description,
+        $invoice_date,
         $created_by,
         $agent_id,
         $branch_entity_id,
@@ -516,7 +780,8 @@ function php_create_voucher_and_post(
     $reference = '',
     $allocations_json = null,
     $cost_center_id = null,
-    $edit_id = null
+    $edit_id = null,
+    $auto_post = true
 ) {
     try {
         $user_id = $_SESSION['admin_id'] ?? 1;
@@ -531,66 +796,9 @@ function php_create_voucher_and_post(
             // إلغاء القيد القديم قبل التعديل (عكس الأرصدة)
             // First, reverse the balances
             if ($old_data['status'] == 'posted') {
-                $stmt_lines = $pdo->prepare("SELECT account_id, debit, credit, currency_id, branch_id FROM journal_lines WHERE financial_transaction_id = ?");
-                $stmt_lines->execute([$edit_id]);
-                $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
-
-                $default_branch_id = $old_data['branch_id'];
-
-                foreach ($lines as $line) {
-                    $account_id = $line['account_id'];
-                    $curr_id = $line['currency_id'];
-                    $line_branch_id = $line['branch_id'] ?? $default_branch_id;
-                    $change_amount = $line['credit'] - $line['debit']; // reverse
-
-                    $stmt_curr = $pdo->prepare("SELECT exchange_rate, currency_code FROM currencies WHERE id = ?");
-                    $stmt_curr->execute([$curr_id]);
-                    $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
-                    $rate = (float)($curr['exchange_rate'] ?? 1);
-                    $currency_code = $curr['currency_code'] ?? '';
-                    $change_base = $change_amount * $rate;
-
-                    // First check if the row exists
-                    if ($line_branch_id === null) {
-                        $stmt_check = $pdo->prepare("
-                            SELECT id FROM account_balances_unified 
-                            WHERE account_id = ? AND branch_id IS NULL AND currency_id = ?
-                        ");
-                        $stmt_check->execute([$account_id, $curr_id]);
-                    } else {
-                        $stmt_check = $pdo->prepare("
-                            SELECT id FROM account_balances_unified 
-                            WHERE account_id = ? AND branch_id = ? AND currency_id = ?
-                        ");
-                        $stmt_check->execute([$account_id, $line_branch_id, $curr_id]);
-                    }
-                    $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
-
-                    if ($exists) {
-                        // Update existing row
-                        $stmt_upd = $pdo->prepare("
-                            UPDATE account_balances_unified 
-                            SET 
-                                current_balance = current_balance + ?, 
-                                current_balance_base = current_balance_base + ?,
-                                currency_code = ?
-                            WHERE id = ?
-                        ");
-                        $stmt_upd->execute([$change_amount, $change_base, $currency_code, $exists['id']]);
-                    } else {
-                        // Insert new row with all required columns
-                        $stmt_ins = $pdo->prepare("
-                            INSERT INTO account_balances_unified (
-                                account_id, branch_id, currency_id, currency_code,
-                                opening_balance, current_balance, current_balance_base,
-                                opening_balance_base, credit_limit, debit_limit, is_frozen
-                            ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0)
-                        ");
-                        $stmt_ins->execute([$account_id, $line_branch_id, $curr_id, $currency_code, $change_amount, $change_base]);
-                    }
+                if (!balances_triggers_enabled($pdo)) {
+                    apply_transaction_balances($pdo, (int)$edit_id, -1);
                 }
-
-                // Delete old journal lines
                 $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$edit_id]);
             }
 
@@ -646,10 +854,12 @@ function php_create_voucher_and_post(
         }
 
         // ترحيل السند
-        if ($type == 'receipt') {
-            php_post_receipt_voucher($pdo, $voucher_id, $user_id);
-        } else {
-            php_post_payment_voucher($pdo, $voucher_id, $user_id);
+        if ($auto_post) {
+            if ($type == 'receipt') {
+                php_post_receipt_voucher($pdo, $voucher_id, $user_id);
+            } else {
+                php_post_payment_voucher($pdo, $voucher_id, $user_id);
+            }
         }
 
         // تسجيل السجل
@@ -672,8 +882,8 @@ function php_create_voucher_and_post(
             if (is_array($allocations)) {
                 foreach ($allocations as $alloc) {
                     if (isset($alloc['invoice_id']) && isset($alloc['amount'])) {
-                        $stmt_alloc = $pdo->prepare("INSERT INTO payment_allocations (financial_transaction_id, invoice_id, amount) VALUES (?, ?, ?)");
-                        $stmt_alloc->execute([$voucher_id, $alloc['invoice_id'], $alloc['amount']]);
+                        $stmt_alloc = $pdo->prepare("INSERT INTO payment_allocations (financial_transaction_id, invoice_id, allocated_amount) VALUES (?, ?, ?)");
+                        $stmt_alloc->execute([$voucher_id, $alloc['invoice_id'], (float)$alloc['amount']]);
                         php_recalculate_invoice_payment($pdo, $alloc['invoice_id']);
                     }
                 }
@@ -690,6 +900,35 @@ function php_create_voucher_and_post(
 /**
  * إنشاء حساب تلقائي للكيانات في شجرة الحسابات الموحدة
  */
+function php_get_next_child_account_code($pdo, $parent_code)
+{
+    $parent_code = trim((string)$parent_code);
+    if ($parent_code === '') {
+        return false;
+    }
+
+    $stmt = $pdo->prepare("
+        SELECT account_code
+        FROM unified_accounts
+        WHERE account_code LIKE ?
+          AND account_code <> ?
+        ORDER BY LENGTH(account_code) DESC, account_code DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$parent_code . '%', $parent_code]);
+    $last_code = $stmt->fetchColumn();
+
+    if (!$last_code) {
+        return $parent_code . '001';
+    }
+
+    $suffix = substr((string)$last_code, strlen($parent_code));
+    $next_number = ((int)$suffix) + 1;
+    $suffix_length = max(3, strlen((string)$suffix));
+
+    return $parent_code . str_pad((string)$next_number, $suffix_length, '0', STR_PAD_LEFT);
+}
+
 function php_handle_entity_account_creation($pdo, $entity_type, $entity_id, $entity_name)
 {
     try {
@@ -700,7 +939,7 @@ function php_handle_entity_account_creation($pdo, $entity_type, $entity_id, $ent
         switch ($entity_type) {
             case 'customer':
                 $parent_code = '11201';
-                $type = 'receivable';
+                $type = 'عميل';
                 $normal = 'debit';
                 break;
             case 'agent':
@@ -715,7 +954,7 @@ function php_handle_entity_account_creation($pdo, $entity_type, $entity_id, $ent
                 break;
             case 'supplier':
                 $parent_code = '21101';
-                $type = 'payable';
+                $type = 'مورد';
                 $normal = 'credit';
                 break;
             case 'employee':
@@ -733,17 +972,26 @@ function php_handle_entity_account_creation($pdo, $entity_type, $entity_id, $ent
 
         if (!$parent_id) return false;
 
-        $account_code = $parent_code . str_pad($entity_id, 4, '0', STR_PAD_LEFT);
+        $table = ($entity_type == 'customer') ? 'customers' : (($entity_type == 'agent') ? 'agents' : (($entity_type == 'branch') ? 'branches' : (($entity_type == 'supplier') ? 'suppliers' : 'employees')));
 
-        // التحقق من وجود الحساب
-        $stmt_check = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_code = ?");
-        $stmt_check->execute([$account_code]);
-        $existing_id = $stmt_check->fetchColumn();
-        if ($existing_id) return $existing_id;
+        $stmt_entity = $pdo->prepare("SELECT account_id FROM `$table` WHERE id = ? LIMIT 1");
+        $stmt_entity->execute([$entity_id]);
+        $entity_account_id = $stmt_entity->fetchColumn();
+        if ($entity_account_id) {
+            $stmt_existing_entity = $pdo->prepare("SELECT id FROM unified_accounts WHERE id = ?");
+            $stmt_existing_entity->execute([$entity_account_id]);
+            $existing_entity_account_id = $stmt_existing_entity->fetchColumn();
+            if ($existing_entity_account_id) {
+                return (int)$existing_entity_account_id;
+            }
+        }
+
+        $account_code = php_get_next_child_account_code($pdo, $parent_code);
+        if (!$account_code) return false;
 
         $stmt = $pdo->prepare("INSERT INTO unified_accounts (parent_id, account_code, account_name_ar, account_type, owner_type, normal_balance) VALUES (?, ?, ?, ?, ?, ?)");
         $stmt->execute([$parent_id, $account_code, $entity_name, $type, $entity_type, $normal]);
-$account_id = $pdo->lastInsertId();
+        $account_id = $pdo->lastInsertId();
 
         // Add the base currency to the account balances unified table
         $base = get_base_currency($pdo);
@@ -758,7 +1006,6 @@ $account_id = $pdo->lastInsertId();
             $stmt_base_balance->execute([$account_id, $base_currency_id, $currency_code]);
         }
 
-        $table = ($entity_type == 'customer') ? 'customers' : (($entity_type == 'agent') ? 'agents' : (($entity_type == 'branch') ? 'branches' : (($entity_type == 'supplier') ? 'suppliers' : 'employees')));
         $pdo->prepare("UPDATE `$table` SET account_id = ? WHERE id = ?")->execute([$account_id, $entity_id]);
 
         return $account_id;
@@ -815,7 +1062,11 @@ function check_account_limits($pdo, $account_id, $currency_id, $amount_change)
     $enable_debit_limit_check = (bool)($settings['enable_debit_limit_check'] ?? true);
 
     // 1. التحقق من حالة التجميد للعملة المحددة (دائماً يتم التحقق منها بغض النظر عن الإعدادات)
-    $stmt_freeze = $pdo->prepare("SELECT is_frozen, currency_code FROM account_balances_unified WHERE account_id = ? AND currency_id = ?");
+    $stmt_freeze = $pdo->prepare("
+        SELECT COALESCE(MAX(is_frozen), 0) AS is_frozen, MAX(currency_code) AS currency_code
+        FROM account_balances_unified
+        WHERE account_id = ? AND currency_id = ?
+    ");
     $stmt_freeze->execute([$account_id, $currency_id]);
     $freeze_info = $stmt_freeze->fetch(PDO::FETCH_ASSOC);
     if (!$freeze_info) {
@@ -912,12 +1163,13 @@ function check_account_limits($pdo, $account_id, $currency_id, $amount_change)
 }
 
 /**
- * إلغاء حركة مالية وعكس تأثيرها على الأرصدة
+ * إلغاء حركة مالية وعكس تأثيرها على الأرصدة عبر قيد عكسي
  */
 function php_cancel_transaction($pdo, $id)
 {
     try {
         $user_id = $_SESSION['admin_id'] ?? 1;
+        $user_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
 
         // 1. جلب بيانات الحركة
         $stmt = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
@@ -926,33 +1178,104 @@ function php_cancel_transaction($pdo, $id)
 
         if (!$trx || $trx['status'] == 'cancelled') return false;
 
-        // 2. عكس الأرصدة (إذا كانت المرحلة 'posted')
+        // 2. إذا كانت المعاملة مرحّلة، ننشئ قيداً عكسياً
         if ($trx['status'] == 'posted') {
-            // جلب أسطر القيد المرتبطة
             $stmt_lines = $pdo->prepare("SELECT * FROM journal_lines WHERE financial_transaction_id = ?");
             $stmt_lines->execute([$id]);
-            $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
+            $original_lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
 
-            foreach ($lines as $line) {
-                // عكس المبلغ: إذا كان مدين نطرحه، وإذا كان دائن نضيفه (أو العكس حسب طبيعة الحساب)
-                $amount_to_reverse = ($line['debit'] > 0) ? -$line['debit'] : $line['credit'];
-                
-                // Get exchange rate to calculate base amount
-                $stmt_curr = $pdo->prepare("SELECT exchange_rate FROM currencies WHERE id = ?");
-                $stmt_curr->execute([$trx['currency_id']]);
-                $rate = (float)($stmt_curr->fetchColumn() ?: 1);
-                $amount_to_reverse_base = $amount_to_reverse * $rate;
-                
-                $stmt_bal = $pdo->prepare("UPDATE account_balances_unified SET current_balance = current_balance + ?, current_balance_base = current_balance_base + ? WHERE account_id = ? AND currency_id = ?");
-                $stmt_bal->execute([$amount_to_reverse, $amount_to_reverse_base, $line['account_id'], $trx['currency_id']]);
+            if (!empty($original_lines)) {
+                $rev_type = $trx['transaction_type'];
+                $rev_number = fn_get_next_sequence($pdo, $rev_type);
+
+                $stmt_rev = $pdo->prepare("
+                    INSERT INTO financial_transactions (
+                        transaction_number, transaction_date, branch_id,
+                        transaction_type, entity_type, entity_id,
+                        amount, currency_id, exchange_rate,
+                        cash_bank_account_id, party_account_id,
+                        cost_center_id, reference_number,
+                        description, created_by, status,
+                        reference_type, reference_id
+                    ) VALUES (
+                        ?, CURDATE(), ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?,
+                        ?, ?,
+                        ?, ?, 'posted',
+                        'reversal', ?
+                    )
+                ");
+                $rev_desc = 'قيد عكسي للإلغاء | معاملة رقم: ' . $trx['transaction_number'];
+                $stmt_rev->execute([
+                    $rev_number,
+                    $trx['branch_id'],
+                    $rev_type,
+                    $trx['entity_type'],
+                    $trx['entity_id'],
+                    $trx['amount'],
+                    $trx['currency_id'],
+                    $trx['exchange_rate'] ?? 1,
+                    $trx['cash_bank_account_id'],
+                    $trx['party_account_id'],
+                    $trx['cost_center_id'],
+                    $trx['reference_number'],
+                    $rev_desc,
+                    $user_id,
+                    $id,
+                ]);
+                $reversal_id = $pdo->lastInsertId();
+
+                foreach ($original_lines as $line) {
+                    $pdo->prepare("
+                        INSERT INTO journal_lines
+                            (financial_transaction_id, account_id, debit, credit,
+                             currency_id, branch_id, cost_center_id, description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ")->execute([
+                        $reversal_id,
+                        $line['account_id'],
+                        $line['credit'],   // Credit becomes debit
+                        $line['debit'],    // Debit becomes credit
+                        $line['currency_id'],
+                        $line['branch_id'],
+                        $line['cost_center_id'] ?? null,
+                        'قيد عكسي: ' . ($line['description'] ?? ''),
+                    ]);
+                }
+
+                if (!balances_triggers_enabled($pdo)) {
+                    apply_transaction_balances($pdo, (int)$reversal_id, 1);
+                }
+            } else {
+                if (!balances_triggers_enabled($pdo)) {
+                    apply_transaction_balances($pdo, (int)$id, -1);
+                }
             }
         }
 
-        // 3. تحديث حالة الحركة
-        $stmt_upd = $pdo->prepare("UPDATE financial_transactions SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP, updated_by = ? WHERE id = ?");
-        $stmt_upd->execute([$user_id, $id]);
+        // 3. تحديث حالة المعاملة الأصلية
+        $stmt_upd = $pdo->prepare("
+            UPDATE financial_transactions 
+            SET status = 'cancelled', 
+                updated_at = CURRENT_TIMESTAMP, 
+                updated_by = ?,
+                cancelled_at = NOW(),
+                cancelled_by = ?,
+                cancelled_ip = ?,
+                cancellation_reason = 'إلغاء المعاملة'
+            WHERE id = ?
+        ");
+        $stmt_upd->execute([$user_id, $user_id, $user_ip, $id]);
 
-        // 4. تسجيل في السجل
+        // 4. إعادة حساب مبالغ الفواتير المرتبطة
+        $invoice_ids = php_get_transaction_invoice_ids($pdo, $id);
+        if (!empty($invoice_ids)) {
+            php_recalculate_invoice_payments($pdo, $invoice_ids);
+        }
+
+        // 5. تسجيل في السجل
         log_financial_transaction_change($pdo, $id, 'cancel');
 
         return true;
@@ -976,7 +1299,7 @@ function format_account_balance($balance, $normal_balance = 'debit', $currency =
     }
 
     if ($normal_balance == 'debit') {
-        $status = ($balance > 0) ? 'له (مدين)' : 'عليه (دائن)';
+        $status = ($balance > 0) ? 'عليه (مدين)' : 'له (دائن)';
         $class = ($balance > 0) ? 'text-success' : 'text-danger';
     } else {
         $status = ($balance > 0) ? 'عليه (مدين)' : 'له (دائن)';
@@ -1000,6 +1323,18 @@ function get_total_balance_status($total, $type = 'asset', $currency = 'YER')
 /**
  * جلب شجرة الحسابات بشكل هرمي (قائمة مسطحة مرتبة)
  */
+function build_flat_tree($accounts, $parent_id, $depth, &$tree)
+{
+    foreach ($accounts as $account) {
+        if ($account['parent_id'] == $parent_id) {
+            $account['depth'] = $depth;
+            $account['display_name'] = str_repeat('&nbsp;&nbsp;&nbsp;&nbsp;', $depth) . $account['account_code'] . ' - ' . $account['account_name_ar'];
+            $tree[] = $account;
+            build_flat_tree($accounts, $account['id'], $depth + 1, $tree);
+        }
+    }
+}
+
 function get_hierarchical_accounts($pdo, $filters = [])
 {
     $where = "WHERE 1=1";
@@ -1123,9 +1458,6 @@ function ensure_multi_currency_columns($pdo)
             }
         }
 
-        // التأكد من وجود المفتاح الفريد
-        $check_index = $pdo->prepare("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?");
-        $check_index->execute([$table, 'acc_curr_code']);
         if ($check_index->fetchColumn() == 0) {
             $pdo->exec("ALTER TABLE `$table` ADD UNIQUE KEY `acc_curr_code` (account_id, currency_code)");
         }
@@ -1134,19 +1466,195 @@ function ensure_multi_currency_columns($pdo)
     }
 }
 
-// تنفيذ التحقق عند التحميل (مُعطل مؤقتاً لتفادي مشاكل النطاق)
-// ensure_multi_currency_columns($pdo);
-
-function build_flat_tree($accounts, $parentId, $level, &$tree)
+/**
+ * جلب معرفات الفواتير المرتبطة بمعاملة مالية محددة
+ */
+function php_get_transaction_invoice_ids($pdo, $transaction_id)
 {
-    foreach ($accounts as $account) {
-        if ($account['parent_id'] == $parentId) {
-            $account['level'] = $level;
-            $account['display_name'] = str_repeat('    ', $level) . ($level > 0 ? '↳ ' : '') . $account['account_code'] . ' - ' . $account['account_name_ar'];
-            $tree[] = $account;
-            build_flat_tree($accounts, $account['id'], $level + 1, $tree);
-        }
+    $stmt = $pdo->prepare("SELECT invoice_id FROM payment_allocations WHERE financial_transaction_id = ? AND invoice_id IS NOT NULL");
+    $stmt->execute([$transaction_id]);
+    return $stmt->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/**
+ * إعادة حساب المبالغ المدفوعة وحالة الدفع لفاتورة محددة
+ */
+function php_recalculate_invoice_payment($pdo, $invoice_id)
+{
+    if (!$invoice_id) {
+        return;
     }
+    
+    try {
+        // جلب المبلغ الإجمالي للفاتورة
+        $stmt_inv = $pdo->prepare("SELECT total_amount FROM invoices WHERE id = ?");
+        $stmt_inv->execute([$invoice_id]);
+        $total_amount = $stmt_inv->fetchColumn();
+        if ($total_amount === false) {
+            return;
+        }
+        
+        // حساب إجمالي المبالغ المدفوعة
+        $stmt_paid = $pdo->prepare("
+            SELECT COALESCE(SUM(pa.amount), 0)
+            FROM payment_allocations pa
+            JOIN financial_transactions ft ON pa.financial_transaction_id = ft.id
+            WHERE pa.invoice_id = ? AND ft.status IN ('draft', 'posted')
+        ");
+        $stmt_paid->execute([$invoice_id]);
+        $amount_received = $stmt_paid->fetchColumn();
+        
+        // تحديث الحالة
+        $payment_status = 'unpaid';
+        if ($amount_received >= $total_amount) {
+            $payment_status = 'paid';
+        } elseif ($amount_received > 0) {
+            $payment_status = 'partially_paid';
+        }
+        
+        $pdo->prepare("
+            UPDATE invoices
+            SET amount_received = ?, payment_status = ?
+            WHERE id = ?
+        ")->execute([$amount_received, $payment_status, $invoice_id]);
+    } catch (Exception $e) {
+        // تجاهل الأخطاء بهدف عدم تعطل النظام
+    }
+}
+
+/**
+ * إعادة حساب المبالغ المدفوعة وحالة الدفع لمجموعة من الفواتير
+ */
+function php_recalculate_invoice_payments($pdo, $invoice_ids)
+{
+    if (empty($invoice_ids)) {
+        return;
+    }
+    
+    foreach ($invoice_ids as $invoice_id) {
+        php_recalculate_invoice_payment($pdo, $invoice_id);
+    }
+}
+
+/**
+ * حذف حركة مالية مع عكس أثرها على الأرصدة (منطق متوافق مع حذف السندات بالقيد العكسي).
+ */
+function php_delete_financial_transaction_and_reverse($pdo, $transaction_id)
+{
+    $transaction_id = (int)$transaction_id;
+    if ($transaction_id < 1) {
+        return;
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
+    $stmt->execute([$transaction_id]);
+    $voucher = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$voucher) {
+        return;
+    }
+
+    $invoice_ids = php_get_transaction_invoice_ids($pdo, $transaction_id);
+
+    if ($voucher['status'] === 'posted') {
+        // 1. جلب أسطر القيد الأصلية
+        $stmt_lines = $pdo->prepare("SELECT * FROM journal_lines WHERE financial_transaction_id = ?");
+        $stmt_lines->execute([$transaction_id]);
+        $original_lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!empty($original_lines)) {
+            $user_id = $_SESSION['admin_id'] ?? 1;
+            $rev_type = $voucher['transaction_type'];
+            $rev_number = fn_get_next_sequence($pdo, $rev_type);
+
+            // 2. إنشاء معاملة عكسية جديدة
+            $stmt_rev = $pdo->prepare("
+                INSERT INTO financial_transactions (
+                    transaction_number, transaction_date, branch_id,
+                    transaction_type, entity_type, entity_id,
+                    amount, currency_id, exchange_rate,
+                    cash_bank_account_id, party_account_id,
+                    cost_center_id, reference_number,
+                    description, created_by, status,
+                    reference_type, reference_id
+                ) VALUES (
+                    ?, CURDATE(), ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?, 'posted',
+                    'reversal', ?
+                )
+            ");
+            $rev_desc = 'قيد عكسي للإلغاء | رقم المعاملة الأصلية: ' . $voucher['transaction_number'];
+            $stmt_rev->execute([
+                $rev_number,
+                $voucher['branch_id'],
+                $rev_type,
+                $voucher['entity_type'],
+                $voucher['entity_id'],
+                $voucher['amount'],
+                $voucher['currency_id'],
+                $voucher['exchange_rate'] ?? 1,
+                $voucher['cash_bank_account_id'],
+                $voucher['party_account_id'],
+                $voucher['cost_center_id'],
+                $voucher['reference_number'],
+                $rev_desc,
+                $user_id,
+                $transaction_id,
+            ]);
+            $reversal_id = $pdo->lastInsertId();
+
+            // 3. إنشاء أسطر القيد العكسية (عكس المدين والدائن)
+            foreach ($original_lines as $line) {
+                $pdo->prepare("
+                    INSERT INTO journal_lines
+                        (financial_transaction_id, account_id, debit, credit,
+                         currency_id, branch_id, cost_center_id, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ")->execute([
+                    $reversal_id,
+                    $line['account_id'],
+                    $line['credit'],   // Credit becomes debit
+                    $line['debit'],    // Debit becomes credit
+                    $line['currency_id'],
+                    $line['branch_id'],
+                    $line['cost_center_id'] ?? null,
+                    'قيد عكسي: ' . ($line['description'] ?? ''),
+                ]);
+            }
+
+            if (!balances_triggers_enabled($pdo)) {
+                apply_transaction_balances($pdo, (int)$reversal_id, 1);
+            }
+        } else {
+            if (!balances_triggers_enabled($pdo)) {
+                apply_transaction_balances($pdo, (int)$transaction_id, -1);
+            }
+        }
+
+        // 4. تحديث حالة المعاملة الأصلية إلى cancelled بدلاً من حذفها
+        $user_id = $_SESSION['admin_id'] ?? 1;
+        $user_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        $pdo->prepare("
+            UPDATE financial_transactions
+            SET status = 'cancelled',
+                cancelled_at = NOW(),
+                cancelled_by = ?,
+                cancelled_ip = ?,
+                cancellation_reason = 'إلغاء وعكس العملية المحاسبية'
+            WHERE id = ?
+        ")->execute([$user_id, $user_ip, $transaction_id]);
+
+    } else {
+        // إذا لم تكن مرحّلة (draft)، نقوم بالحذف المباشر لأسطر القيد والتوزيعات والمعاملة
+        $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$transaction_id]);
+        $pdo->prepare("DELETE FROM payment_allocations WHERE financial_transaction_id = ?")->execute([$transaction_id]);
+        $pdo->prepare("DELETE FROM financial_transactions WHERE id = ?")->execute([$transaction_id]);
+    }
+
+    php_recalculate_invoice_payments($pdo, $invoice_ids);
 }
 
 /**
@@ -1177,10 +1685,6 @@ function php_create_journal_lines(
         if ($credit_account_id) {
             $stmt_line->execute([$transaction_id, $credit_account_id, 0, $amount, $currency_id, $description, $cost_center_id]);
         }
-
-        // 2. تحديث أرصدة الحسابات عبر الإجراء المخزن
-        // $stmt_upd = $pdo->prepare("CALL sp_update_account_balances(?)");
-        $this_pdo = $pdo; $this_trx_id = $transaction_id; include 'update_balances_logic.php';
 
         return true;
     } catch (Exception $e) {
@@ -1262,10 +1766,6 @@ function php_create_financial_entry(
             $stmt_line->execute([$transaction_id, $credit_account_id, 0, $amount, $currency_id, $description, $cost_center_id]);
         }
 
-        // 4. تحديث أرصدة الحسابات
-        // $stmt_upd = $pdo->prepare("CALL sp_update_account_balances(?)");
-        $this_pdo = $pdo; $this_trx_id = $transaction_id; include 'update_balances_logic.php';
-
         if (!$use_outer_transaction) {
             $pdo->commit();
         }
@@ -1286,159 +1786,7 @@ function php_create_financial_entry(
     }
 }
 
-/**
- * حذف حركة مالية مع عكس أثرها على الأرصدة (منطق متوافق مع حذف السندات).
- */
-function php_delete_financial_transaction_and_reverse($pdo, $transaction_id)
-{
-    $transaction_id = (int)$transaction_id;
-    if ($transaction_id < 1) {
-        return;
-    }
 
-    $stmt = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
-    $stmt->execute([$transaction_id]);
-    $voucher = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$voucher) {
-        return;
-    }
-
-    if ($voucher['status'] === 'posted') {
-        $stmt_alloc = $pdo->prepare("SELECT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
-        $stmt_alloc->execute([$transaction_id]);
-        $invoice_ids = $stmt_alloc->fetchAll(PDO::FETCH_COLUMN);
-
-        // Get journal lines before modifying them
-        $stmt_lines = $pdo->prepare("SELECT account_id, debit, credit, currency_id, branch_id FROM journal_lines WHERE financial_transaction_id = ?");
-        $stmt_lines->execute([$transaction_id]);
-        $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
-        
-        // Get branch_id from transaction
-        $stmt_branch = $pdo->prepare("SELECT branch_id FROM financial_transactions WHERE id = ?");
-        $stmt_branch->execute([$transaction_id]);
-        $default_branch_id = $stmt_branch->fetchColumn();
-        
-        // Reverse balances using the original lines (swap debit/credit)
-        foreach ($lines as $line) {
-            $account_id = $line['account_id'];
-            $currency_id = $line['currency_id'];
-            $line_branch_id = $line['branch_id'] ?? $default_branch_id;
-            $amount = $line['credit'] - $line['debit'];
-            
-            // Get exchange rate and currency code
-            $stmt_curr = $pdo->prepare("SELECT exchange_rate, currency_code FROM currencies WHERE id = ?");
-            $stmt_curr->execute([$currency_id]);
-            $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
-            $rate = (float)($curr['exchange_rate'] ?? 1);
-            $currency_code = $curr['currency_code'] ?? '';
-            $amount_base = $amount * $rate;
-            
-            // First check if the row exists
-            if ($line_branch_id === null) {
-                $stmt_check = $pdo->prepare("
-                    SELECT id FROM account_balances_unified 
-                    WHERE account_id = ? AND branch_id IS NULL AND currency_id = ?
-                ");
-                $stmt_check->execute([$account_id, $currency_id]);
-            } else {
-                $stmt_check = $pdo->prepare("
-                    SELECT id FROM account_balances_unified 
-                    WHERE account_id = ? AND branch_id = ? AND currency_id = ?
-                ");
-                $stmt_check->execute([$account_id, $line_branch_id, $currency_id]);
-            }
-            $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
-
-            if ($exists) {
-                // Update existing row
-                $stmt_upd = $pdo->prepare("
-                    UPDATE account_balances_unified 
-                    SET 
-                        current_balance = current_balance + ?, 
-                        current_balance_base = current_balance_base + ?,
-                        currency_code = ?
-                    WHERE id = ?
-                ");
-                $stmt_upd->execute([$amount, $amount_base, $currency_code, $exists['id']]);
-            } else {
-                // Insert new row with all required columns
-                $stmt_ins = $pdo->prepare("
-                    INSERT INTO account_balances_unified (
-                        account_id, branch_id, currency_id, currency_code,
-                        opening_balance, current_balance, current_balance_base,
-                        opening_balance_base, credit_limit, debit_limit, is_frozen
-                    ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0)
-                ");
-                $stmt_ins->execute([$account_id, $line_branch_id, $currency_id, $currency_code, $amount, $amount_base]);
-            }
-        }
-
-        // Now delete the journal lines
-        $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$transaction_id]);
-
-        // Recalculate invoice payment statuses
-        foreach ($invoice_ids as $invoice_id) {
-            if ($invoice_id) {
-                try {
-                    php_recalculate_invoice_payment($pdo, $invoice_id);
-                } catch (Exception $e) {
-                    error_log("php_delete_financial_transaction_and_reverse recalc: " . $e->getMessage());
-                }
-            }
-        }
-    } else {
-        $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$transaction_id]);
-    }
-
-    $pdo->prepare("DELETE FROM payment_allocations WHERE financial_transaction_id = ?")->execute([$transaction_id]);
-    $pdo->prepare("DELETE FROM financial_transactions WHERE id = ?")->execute([$transaction_id]);
-}
-
-/**
- * PHP implementation of sp_recalculate_invoice_payment
- */
-function php_recalculate_invoice_payment($pdo, $invoice_id) {
-    $invoice_id = (int)$invoice_id;
-    if ($invoice_id <1) {
-        return;
-    }
-
-    // Get the invoice's currency and total amount
-    $stmt_inv = $pdo->prepare("SELECT currency_id, net_amount, total_amount FROM invoices WHERE id = ?");
-    $stmt_inv->execute([$invoice_id]);
-    $invoice = $stmt_inv->fetch(PDO::FETCH_ASSOC);
-    if (!$invoice) {
-        return;
-    }
-
-    $total_amount = $invoice['net_amount'] ?? $invoice['total_amount'] ?? 0;
-
-    // Calculate total amount received from payment allocations
-    $stmt_alloc = $pdo->prepare("
-        SELECT COALESCE(SUM(pa.amount), 0) as total_paid
-        FROM payment_allocations pa
-        WHERE pa.invoice_id = ?
-    ");
-    $stmt_alloc->execute([$invoice_id]);
-    $total_paid = $stmt_alloc->fetchColumn();
-
-    // Determine payment status
-    if ($total_paid <= 0) {
-        $payment_status = 'unpaid';
-    } elseif ($total_paid >= $total_amount) {
-        $payment_status = 'paid';
-    } else {
-        $payment_status = 'partially_paid';
-    }
-
-    // Update invoice
-    $stmt_upd = $pdo->prepare("
-        UPDATE invoices
-        SET amount_received = ?, payment_status = ?
-        WHERE id = ?
-    ");
-    $stmt_upd->execute([$total_paid, $payment_status, $invoice_id]);
-}
 
 function php_post_receipt_voucher($pdo, $voucher_id, $user_id) {
     // 1. Get the voucher details
@@ -1449,17 +1797,31 @@ function php_post_receipt_voucher($pdo, $voucher_id, $user_id) {
         throw new Exception("السند غير موجود");
     }
 
+    if ($voucher['status'] === 'cancelled') {
+        throw new Exception("لا يمكن ترحيل سند ملغي");
+    }
+
+    $stmt_lines = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE financial_transaction_id = ?");
+    $stmt_lines->execute([$voucher_id]);
+    $existing_lines_count = (int)$stmt_lines->fetchColumn();
+
+    if ($voucher['status'] === 'posted' && $existing_lines_count > 0) {
+        return true;
+    }
+
     // 2. Create journal lines: Debit cash/bank account, Credit party account
-    php_create_journal_lines(
-        $pdo,
-        $voucher_id,
-        $voucher['cash_bank_account_id'],
-        $voucher['party_account_id'],
-        $voucher['amount'],
-        $voucher['currency_id'],
-        $voucher['description'] ?? '',
-        $voucher['cost_center_id']
-    );
+    if ($existing_lines_count === 0) {
+        php_create_journal_lines(
+            $pdo,
+            $voucher_id,
+            $voucher['cash_bank_account_id'],
+            $voucher['party_account_id'],
+            $voucher['amount'],
+            $voucher['currency_id'],
+            $voucher['description'] ?? '',
+            $voucher['cost_center_id']
+        );
+    }
 
     // 3. Update voucher status to posted
     $stmt_update = $pdo->prepare("
@@ -1469,69 +1831,192 @@ function php_post_receipt_voucher($pdo, $voucher_id, $user_id) {
             posted_at = NOW(), 
             posted_ip = ?
         WHERE id = ?
+          AND status = 'draft'
     ");
     $stmt_update->execute([$user_id, $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $voucher_id]);
 
-    // 4. Recalculate any linked invoices
-    $stmt_alloc = $pdo->prepare("SELECT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
-    $stmt_alloc->execute([$voucher_id]);
-    $invoice_ids = $stmt_alloc->fetchAll(PDO::FETCH_COLUMN);
-    foreach ($invoice_ids as $inv_id) {
-        php_recalculate_invoice_payment($pdo, $inv_id);
+    // 3.5 التحقق من توازن القيد قبل تطبيق الأرصدة
+    validate_journal_balance($pdo, (int)$voucher_id);
+
+    if (!balances_triggers_enabled($pdo)) {
+        apply_transaction_balances($pdo, (int)$voucher_id, 1);
     }
+
+    // 4. Recalculate any linked invoices
+    php_recalculate_invoice_payments($pdo, php_get_transaction_invoice_ids($pdo, $voucher_id));
 
     return true;
 }
 
+/**
+ * توليد رقم تسلسلي آمن ذري باستخدام جدول sequence_numbers مع قفل الصف.
+ * الصيغة: PREFIX-YY-NNNNN (مثال: RCT-26-00014)
+ */
 function fn_get_next_sequence($pdo, $type) {
-    // Simple sequence generator: get max id and add 1, pad with zeros
-    $stmt = $pdo->query("SELECT MAX(id) as max_id FROM financial_transactions");
-    $max = $stmt->fetch(PDO::FETCH_ASSOC);
-    $next = ($max['max_id'] ?? 0) + 1;
-    return strtoupper(substr($type, 0, 3)) . '-' . str_pad($next, 6, '0', STR_PAD_LEFT);
+    $prefixes = [
+        'receipt'  => 'RCT',
+        'payment'  => 'PMT',
+        'invoice'  => 'INV',
+        'purchase' => 'PUR',
+        'journal'  => 'JRN',
+        'exch'     => 'EXH',
+    ];
+    $seq_name = strtolower($type);
+    $prefix   = $prefixes[$seq_name] ?? strtoupper(substr($type, 0, 3));
+    $year     = date('y'); // السنة بخانتين
+
+    try {
+        // استخدام INSERT ... ON DUPLICATE KEY لتحديث ذري آمن
+        $pdo->prepare("
+            INSERT INTO sequence_numbers (sequence_name, last_number, year)
+            VALUES (?, 1, ?)
+            ON DUPLICATE KEY UPDATE
+                last_number = IF(year = ?, last_number + 1, 1),
+                year        = ?
+        ")->execute([$seq_name, $year, $year, $year]);
+
+        $stmt = $pdo->prepare("SELECT last_number FROM sequence_numbers WHERE sequence_name = ?");
+        $stmt->execute([$seq_name]);
+        $next = (int)$stmt->fetchColumn();
+
+        return $prefix . '-' . $year . '-' . str_pad($next, 5, '0', STR_PAD_LEFT);
+    } catch (Exception $e) {
+        // Fallback آمن: استخدام timestamp+type لضمان الفريدية
+        error_log('fn_get_next_sequence fallback: ' . $e->getMessage());
+        return $prefix . '-' . $year . '-' . str_pad(time() % 99999, 5, '0', STR_PAD_LEFT);
+    }
 }
 
-function php_post_payment_voucher($pdo, $voucher_id, $user_id) {
-    // 1. Get the voucher details
-    $stmt_voucher = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
-    $stmt_voucher->execute([$voucher_id]);
-    $voucher = $stmt_voucher->fetch(PDO::FETCH_ASSOC);
-    if (!$voucher) {
-        throw new Exception("السند غير موجود");
-    }
-
-    // 2. Create journal lines: Credit cash/bank account, Debit party account
-    php_create_journal_lines(
-        $pdo,
-        $voucher_id,
-        $voucher['party_account_id'],
-        $voucher['cash_bank_account_id'],
-        $voucher['amount'],
-        $voucher['currency_id'],
-        $voucher['description'] ?? '',
-        $voucher['cost_center_id']
-    );
-
-    // 3. Update voucher status to posted
-    $stmt_update = $pdo->prepare("
-        UPDATE financial_transactions 
-        SET status = 'posted', 
-            posted_by = ?, 
-            posted_at = NOW(), 
-            posted_ip = ?
-        WHERE id = ?
+/**
+ * التحقق من توازن القيد المزدوج (SUM debit = SUM credit).
+ * يرمي Exception إذا كان القيد غير متوازن — يُستدعى قبل COMMIT.
+ */
+function validate_journal_balance($pdo, $transaction_id) {
+    $stmt = $pdo->prepare("
+        SELECT
+            COALESCE(SUM(debit),  0) AS total_debit,
+            COALESCE(SUM(credit), 0) AS total_credit
+        FROM journal_lines
+        WHERE financial_transaction_id = ?
     ");
-    $stmt_update->execute([$user_id, $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $voucher_id]);
+    $stmt->execute([$transaction_id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // 4. Recalculate any linked invoices
-    $stmt_alloc = $pdo->prepare("SELECT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
-    $stmt_alloc->execute([$voucher_id]);
-    $invoice_ids = $stmt_alloc->fetchAll(PDO::FETCH_COLUMN);
-    foreach ($invoice_ids as $inv_id) {
-        php_recalculate_invoice_payment($pdo, $inv_id);
+    $debit  = (float)($row['total_debit']  ?? 0);
+    $credit = (float)($row['total_credit'] ?? 0);
+    $diff   = abs($debit - $credit);
+
+    if ($diff > 0.01) {
+        throw new Exception(
+            sprintf(
+                'القيد غير متوازن (معرف: %d) | مدين: %.4f | دائن: %.4f | الفرق: %.4f',
+                $transaction_id, $debit, $credit, $diff
+            )
+        );
     }
 
     return true;
+}
+
+function php_post_payment_voucher($pdo, $voucher_id, $user_id, $use_outer_transaction = false) {
+    $voucher = null;
+    $transaction_started = false;
+
+    try {
+        if (!$use_outer_transaction && !$pdo->inTransaction()) {
+            $pdo->beginTransaction();
+            $transaction_started = true;
+        }
+
+        // 1. Get the voucher details
+        $stmt_voucher = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
+        $stmt_voucher->execute([$voucher_id]);
+        $voucher = $stmt_voucher->fetch(PDO::FETCH_ASSOC);
+        if (!$voucher) {
+            throw new Exception("السند غير موجود");
+        }
+
+        if ($voucher['status'] === 'cancelled') {
+            throw new Exception("لا يمكن ترحيل سند ملغي");
+        }
+
+        // 1.5 إذا كان المصروف ولم يمر عبر الـ SP المركزي بعد
+        // (معرفة من خلال عدم وجود أسطر اليومية أو أن status = approved)
+        if (($voucher['transaction_type'] === 'expense') && $voucher['status'] === 'approved') {
+            try {
+                $stmt_sp = $pdo->prepare("CALL sp_post_expense_voucher(?, ?)");
+                $stmt_sp->execute([$voucher_id, $user_id]);
+                $stmt_sp->closeCursor();
+                while ($stmt_sp->nextRowset()) { /* noop */ }
+                if ($transaction_started && $pdo->inTransaction()) {
+                    $pdo->commit();
+                }
+                return true;
+            } catch (Exception $e) {
+                // إذا فشل الـ SP المركزي، نكمل بالطريقة PHP العادية
+                error_log("sp_post_expense_voucher fell back: " . $e->getMessage());
+            }
+        }
+
+        $stmt_lines = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE financial_transaction_id = ?");
+        $stmt_lines->execute([$voucher_id]);
+        $existing_lines_count = (int)$stmt_lines->fetchColumn();
+
+        if ($voucher['status'] === 'posted' && $existing_lines_count > 0) {
+            if ($transaction_started && $pdo->inTransaction()) {
+                $pdo->commit();
+            }
+            return true;
+        }
+
+        // 2. Create journal lines: Credit cash/bank account, Debit party account
+        if ($existing_lines_count === 0) {
+            php_create_journal_lines(
+                $pdo,
+                $voucher_id,
+                $voucher['party_account_id'],
+                $voucher['cash_bank_account_id'],
+                $voucher['amount'],
+                $voucher['currency_id'],
+                $voucher['description'] ?? '',
+                $voucher['cost_center_id']
+            );
+        }
+
+        // 3. Update voucher status to posted
+        $stmt_update = $pdo->prepare("
+            UPDATE financial_transactions 
+            SET status = 'posted', 
+                posted_by = ?, 
+                posted_at = NOW(), 
+                posted_ip = ?
+            WHERE id = ?
+              AND status IN ('draft','approved','pending_approval')
+        ");
+        $stmt_update->execute([$user_id, $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $voucher_id]);
+
+        // 3.5 التحقق من توازن القيد قبل تطبيق الأرصدة
+        validate_journal_balance($pdo, (int)$voucher_id);
+
+        if (!balances_triggers_enabled($pdo)) {
+            apply_transaction_balances($pdo, (int)$voucher_id, 1);
+        }
+
+        // 4. Recalculate any linked invoices
+        php_recalculate_invoice_payments($pdo, php_get_transaction_invoice_ids($pdo, $voucher_id));
+
+        if ($transaction_started && $pdo->inTransaction()) {
+            $pdo->commit();
+        }
+
+        return true;
+    } catch (Exception $e) {
+        if ($transaction_started && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("php_post_payment_voucher error: " . $e->getMessage());
+        throw $e;
+    }
 }
 
 /**
@@ -1539,6 +2024,7 @@ function php_post_payment_voucher($pdo, $voucher_id, $user_id) {
  */
 function get_account_status_label($status)
 {
+
     switch ($status) {
         case 'active':
             return '<span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3">نشط</span>';
@@ -1682,7 +2168,7 @@ function post_service_to_unified($pdo, $type, $id, $user_id)
             $sale_price,
             0, // discount
             $purchase_price,
-            'credit',
+            'draft',
             "فاتورة جواز: " . $p['full_name'],
             $user_id
         );

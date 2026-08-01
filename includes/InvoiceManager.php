@@ -4,6 +4,8 @@
  * يقوم بإنشاء الفواتير في جدول invoices وربطها بالخدمات
  */
 
+require_once __DIR__ . '/functions.php';
+
 class InvoiceManager {
     private $pdo;
     
@@ -68,7 +70,7 @@ class InvoiceManager {
         
         $stmt->execute([
             ':invoice_number' => $invoice_number,
-            ':invoice_date' => $data['invoice_date'],
+            ':invoice_date' => normalize_datetime_db($data['invoice_date'] ?? null),
             ':due_date' => $data['due_date'] ?? null,
             ':branch_id' => $data['branch_id'] ?? null,
             ':source_type' => $data['source_type'],
@@ -123,7 +125,7 @@ class InvoiceManager {
         
         $stmt->execute([
             ':invoice_number' => $invoice_number,
-            ':invoice_date' => $data['invoice_date'],
+            ':invoice_date' => normalize_datetime_db($data['invoice_date'] ?? null),
             ':due_date' => $data['due_date'] ?? null,
             ':branch_id' => $data['branch_id'] ?? null,
             ':source_type' => $data['source_type'],

@@ -13,6 +13,10 @@ if (!has_permission('manage_financial_accounts')) {
     exit();
 }
 
+if (isset($_GET['deactivate']) || isset($_GET['delete_permanent'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة فرع جديد
 if (isset($_POST['add_branch_account'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -92,9 +96,12 @@ if (isset($_POST['update_branch_account'])) {
     }
 }
 
-// تحويل إلى خامل
-if (isset($_GET['deactivate'])) {
-    $id = (int)$_GET['deactivate'];
+// تحويل إلى خامل عبر POST + CSRF
+if (isset($_POST['deactivate_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='branches.php';</script>");
+    }
+    $id = (int)$_POST['deactivate_account'];
     try {
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
         $stmt->execute([$id]);
@@ -105,9 +112,12 @@ if (isset($_GET['deactivate'])) {
     }
 }
 
-// حذف نهائي
-if (isset($_GET['delete_permanent'])) {
-    $id = (int)$_GET['delete_permanent'];
+// حذف نهائي عبر POST + CSRF
+if (isset($_POST['delete_account_permanent'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='branches.php';</script>");
+    }
+    $id = (int)$_POST['delete_account_permanent'];
     try {
         $pdo->beginTransaction();
 
@@ -299,14 +309,16 @@ $page_title = "إدارة الفروع";
                                             data-branch="<?php echo $branch['branch_id']; ?>"
                                             data-status="<?php echo $branch['account_status']; ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="branches.php?deactivate=<?php echo $branch['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من تحويل هذا الفرع إلى خامل؟')"
-                                       title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></a>
-                                    <a href="branches.php?delete_permanent=<?php echo $branch['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا الفرع نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')"
-                                       title="حذف نهائي"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من تحويل هذا الفرع إلى خامل؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="deactivate_account" value="<?php echo $branch['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></button>
+                                    </form>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الفرع نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_account_permanent" value="<?php echo $branch['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف نهائي"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>

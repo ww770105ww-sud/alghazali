@@ -12,8 +12,15 @@ if (!has_permission('settings_view') && !$is_admin) {
 $success_msg = "";
 $error_msg = "";
 
+if (isset($_GET['delete'])) {
+    $error_msg = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // معالجة الحفظ والتعديل
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['delete_center'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
     $id = (int)($_POST['id'] ?? 0);
     $center_code = $_POST['center_code'];
     $center_name_ar = $_POST['center_name_ar'];
@@ -33,11 +40,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (PDOException $e) {
         $error_msg = "خطأ: " . $e->getMessage();
     }
+    }
 }
 
-// معالجة الحذف
-if (isset($_GET['delete'])) {
-    $del_id = (int)$_GET['delete'];
+// معالجة الحذف عبر POST + CSRF
+if (isset($_POST['delete_center'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error_msg = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+    $del_id = (int)$_POST['delete_center'];
     try {
         // التحقق من عدم وجود أبناء
         $check = $pdo->prepare("SELECT COUNT(*) FROM cost_centers WHERE parent_id = ?");
@@ -50,6 +61,7 @@ if (isset($_GET['delete'])) {
         }
     } catch (PDOException $e) {
         $error_msg = "خطأ في الحذف: " . $e->getMessage();
+    }
     }
 }
 
@@ -133,9 +145,13 @@ $tree = buildTree($centers);
                                                 <button class="btn btn-sm btn-light rounded-circle shadow-sm me-1" onclick='editCenter(<?php echo json_encode($c); ?>)' title="تعديل">
                                                     <i class="fas fa-edit text-info"></i>
                                                 </button>
-                                                <a href="?delete=<?php echo $c['id']; ?>" class="btn btn-sm btn-light rounded-circle shadow-sm" onclick="return confirm('هل أنت متأكد من الحذف؟')" title="حذف">
-                                                    <i class="fas fa-trash text-danger"></i>
-                                                </a>
+                                                <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من الحذف؟')">
+                                                    <?php echo csrf_input(); ?>
+                                                    <input type="hidden" name="delete_center" value="<?php echo $c['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-light rounded-circle shadow-sm" title="حذف">
+                                                        <i class="fas fa-trash text-danger"></i>
+                                                    </button>
+                                                </form>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -158,6 +174,7 @@ $tree = buildTree($centers);
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-body p-4">
                     <input type="hidden" name="id" id="center_id">
                     <div class="mb-3">

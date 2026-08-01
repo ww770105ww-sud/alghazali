@@ -1,27 +1,49 @@
 <?php
 ob_start();
 define('SYSTEM_ACCESS', true);
-// Secure session configuration
-if (session_status() === PHP_SESSION_NONE) {
-    // Set secure cookie parameters
-    session_set_cookie_params([
-        'lifetime' => 0, // Session lifetime (0 = until browser closes)
-        'path' => '/',
-        'domain' => '', // Leave empty for current domain
-        'secure' => (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on'), // Only enable HTTPS on production
-        'httponly' => true, // Prevent JavaScript access
-        'samesite' => 'Strict' // Prevent CSRF attacks
-    ]);
-    session_start();
+if (!headers_sent()) {
+    header('Content-Type: text/html; charset=utf-8');
 }
+require_once __DIR__ . '/../includes/session_config.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/accounting_functions.php';
 require_once __DIR__ . '/../includes/system_error_audit.php';
+require_once __DIR__ . '/../includes/crm_functions.php';
 if (!isset($_SESSION['admin_id'])) {
     header('Location: login.php');
     exit();
 }
+
+// Validate that current session is still active in database
+$current_session_id = session_id();
+$current_user_id = $_SESSION['admin_id'];
+try {
+    // Check if user_sessions table has device_fingerprint column
+    $checkCol = $pdo->query("SHOW COLUMNS FROM user_sessions LIKE 'device_fingerprint'");
+    $hasDeviceFingerprint = $checkCol->fetch() !== false;
+    
+    $stmt = $pdo->prepare("SELECT status, id FROM user_sessions WHERE session_id = ? AND user_id = ? ORDER BY started_at DESC LIMIT 1");
+    $stmt->execute([$current_session_id, $current_user_id]);
+    $session = $stmt->fetch();
+    
+    if (!$session) {
+        // Session not found in database, create a new one!
+        createUserSession($current_user_id);
+    } elseif ($session['status'] !== 'active') {
+        // Session is terminated, log out!
+        session_unset();
+        session_destroy();
+        header('Location: login.php');
+        exit;
+    }
+} catch (Exception $e) {
+    // If there's any error, log it and continue
+    error_log("Session validation error: " . $e->getMessage());
+}
+
+// Update last session activity
+updateSessionActivity();
 
 // تسجيل أخطاء النظام (لوحة التحكم فقط)
 try {
@@ -87,6 +109,134 @@ $admin_id = $_SESSION['admin_id'];
 $unread_internal = $pdo->prepare("SELECT COUNT(*) FROM internal_messages WHERE receiver_id = ? AND is_read = 0");
 $unread_internal->execute([$admin_id]);
 $unread_internal_count = $unread_internal->fetchColumn();
+
+// دالة للتحقق من تواريخ السفر القادمة وتوليد إشعارات
+function checkUpcomingTravelNotifications($pdo, $currentUser) {
+    // إضافة الأعمدة إذا لم تكن موجودة (جاهز لأي حالة)
+    try {
+        $check1 = $pdo->query("SHOW COLUMNS FROM notifications LIKE 'source_type'");
+        if (!$check1->fetch()) {
+            $pdo->exec("ALTER TABLE notifications ADD COLUMN source_type VARCHAR(100) NULL AFTER link");
+        }
+        $check2 = $pdo->query("SHOW COLUMNS FROM notifications LIKE 'source_id'");
+        if (!$check2->fetch()) {
+            $pdo->exec("ALTER TABLE notifications ADD COLUMN source_id INT(11) NULL AFTER source_type");
+        }
+        $check3 = $pdo->query("SHOW INDEX FROM notifications WHERE Key_name = 'idx_notifications_source'");
+        if (!$check3->fetch()) {
+            $pdo->exec("CREATE INDEX idx_notifications_source ON notifications (source_type, source_id)");
+        }
+    } catch (Exception $e) {
+        // تجاهل الأخطاء هنا، الأعمدة موجودة بالفعل أو لا نحتاجها الآن
+    }
+    
+    $todayDate = date('Y-m-d');
+    $tomorrowDate = date('Y-m-d', strtotime('+1 day'));
+    
+    // 1. تحقق من حجوزات الطيران والباصات
+    $bookingsStmt = $pdo->prepare("
+        SELECT 
+            b.id, 
+            b.traveler_name, 
+            b.departure_date, 
+            b.service_type,
+            b.branch_id,
+            b.agent_id
+        FROM bus_flight_bookings b
+        WHERE 
+            b.deleted_at IS NULL 
+            AND b.departure_date IS NOT NULL
+            AND b.departure_date BETWEEN ? AND ?
+    ");
+    $bookingsStmt->execute([$todayDate, $tomorrowDate]);
+    $bookings = $bookingsStmt->fetchAll();
+    
+    foreach ($bookings as $booking) {
+        // تحقق من وجود إشعار بالفعل
+        $existing = $pdo->prepare("
+            SELECT id FROM notifications 
+            WHERE source_type = ? AND source_id = ?
+        ");
+        $sourceType = $booking['service_type'] == 'flight' ? 'flight_booking' : 'bus_booking';
+        $existing->execute([$sourceType, $booking['id']]);
+        
+        if (!$existing->fetch()) {
+            // إنشاء إشعار
+            $title = $booking['service_type'] == 'flight' ? 'تنبيه: موعد طيران قريب' : 'تنبيه: موعد رحلـة باص قريب';
+            $message = "المسافر: " . $booking['traveler_name'] . "\nتاريخ المغادرة: " . $booking['departure_date'];
+            $link = 'bus_flight_bookings.php';
+            
+            $stmt = $pdo->prepare("
+                INSERT INTO notifications (
+                    branch_id, agent_id, title, message, link, type, 
+                    source_type, source_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, 'warning', ?, ?, ?)
+            ");
+            $stmt->execute([
+                $booking['branch_id'],
+                $booking['agent_id'],
+                $title,
+                $message,
+                $link,
+                $sourceType,
+                $booking['id'],
+                $currentUser['id']
+            ]);
+        }
+    }
+    
+    // 2. تحقق من معاملات الجوازات (تاريخ السفر)
+    $passportStmt = $pdo->prepare("
+        SELECT 
+            pt.id, 
+            pt.full_name, 
+            pt.travel_date,
+            pt.branch_id,
+            pt.agent_id
+        FROM passport_transactions pt
+        WHERE 
+            pt.travel_date IS NOT NULL
+            AND pt.travel_date BETWEEN ? AND ?
+    ");
+    $passportStmt->execute([$todayDate, $tomorrowDate]);
+    $passportTrxs = $passportStmt->fetchAll();
+    
+    foreach ($passportTrxs as $trx) {
+        // تحقق من وجود إشعار بالفعل
+        $existing = $pdo->prepare("
+            SELECT id FROM notifications 
+            WHERE source_type = ? AND source_id = ?
+        ");
+        $existing->execute(['passport_travel', $trx['id']]);
+        
+        if (!$existing->fetch()) {
+            // إنشاء إشعار
+            $title = 'تنبيه: موعد سفر قريب (معاملة جوازات)';
+            $message = "الاسم: " . $trx['full_name'] . "\nتاريخ السفر: " . $trx['travel_date'];
+            $link = 'passport_transactions.php';
+            
+            $stmt = $pdo->prepare("
+                INSERT INTO notifications (
+                    branch_id, agent_id, title, message, link, type, 
+                    source_type, source_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, 'warning', ?, ?, ?)
+            ");
+            $stmt->execute([
+                $trx['branch_id'],
+                $trx['agent_id'],
+                $title,
+                $message,
+                $link,
+                'passport_travel',
+                $trx['id'],
+                $currentUser['id']
+            ]);
+        }
+    }
+}
+
+// تشغيل دالة التحقق من الإشعارات
+checkUpcomingTravelNotifications($pdo, $currentUser);
 
 // أحدث العناصر للإشعارات
 $recent_internal = $pdo->prepare("
@@ -209,6 +359,10 @@ if ($is_admin) {
     $stmt_app_count = $pdo->query("SELECT COUNT(*) FROM workflow_approval_requests WHERE status = 'pending'");
     $pending_approvals_count = $stmt_app_count->fetchColumn();
 }
+
+$script_name = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '/admin/index.php');
+$admin_pos = strpos($script_name, '/admin/');
+$admin_base_url = $admin_pos !== false ? substr($script_name, 0, $admin_pos + 7) : '/admin/';
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -219,7 +373,7 @@ if ($is_admin) {
     <title>لوحة التحكم | <?php echo $settings['site_name']; ?></title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/css/icon-fallback.css?v=20260430">
+    <link rel="stylesheet" href="../assets/css/icon-fallback.css?v=20260617">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <link rel="stylesheet" href="chat.css">
@@ -269,8 +423,8 @@ if ($is_admin) {
             color: #94a3b8 !important;
         }
     </style>
-    <link rel="stylesheet" href="../assets/css/unified-design.css?v=20260430">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="../assets/css/unified-design.css?v=20260630">
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -1441,6 +1595,23 @@ if ($is_admin) {
     </style>
 
     <script>
+        const ADMIN_BASE_URL = <?php echo json_encode($admin_base_url, JSON_UNESCAPED_SLASHES); ?>;
+
+        function adminUrl(path) {
+            if (!path || path === '#') return path;
+            if (/^(?:[a-z]+:)?\/\//i.test(path) || path.startsWith('/') || path.startsWith('mailto:') || path.startsWith('tel:')) {
+                return path;
+            }
+            return ADMIN_BASE_URL + path.replace(/^\.?\//, '');
+        }
+
+        function normalizeAdminNavigationLinks(root = document) {
+            root.querySelectorAll('.sidebar-menu a[href], #quickSearchResults a[href], .apps-menu a[href]').forEach(link => {
+                const href = link.getAttribute('href');
+                link.setAttribute('href', adminUrl(href));
+            });
+        }
+
         function toggleSidebarMenu(event) {
             if (event) {
                 // Only prevent default if the clicked element is NOT a link
@@ -1473,6 +1644,8 @@ if ($is_admin) {
 
         // استعادة حالة القائمة عند التحميل
         document.addEventListener('DOMContentLoaded', function() {
+            normalizeAdminNavigationLinks();
+
             const sidebar = document.getElementById('sidebar');
             const mainWrapper = document.querySelector('.main-wrapper');
             const isCollapsed = localStorage.getItem('sidebar_collapsed') === 'true';
@@ -1607,6 +1780,7 @@ if ($is_admin) {
                 }
             ];
             resultsEl.innerHTML = items.map(i => `<a class="list-group-item list-group-item-action" href="${i.href}">${i.label}</a>`).join('');
+            normalizeAdminNavigationLinks(resultsEl);
             const modal = new bootstrap.Modal(modalEl);
             modal.show();
             setTimeout(() => inputEl.focus(), 200);
@@ -1614,6 +1788,7 @@ if ($is_admin) {
                 const q = this.value.trim();
                 const filtered = items.filter(i => i.label.includes(q));
                 resultsEl.innerHTML = filtered.map(i => `<a class="list-group-item list-group-item-action" href="${i.href}">${i.label}</a>`).join('');
+                normalizeAdminNavigationLinks(resultsEl);
             };
         }
         document.addEventListener('keydown', function(e) {
@@ -1660,7 +1835,7 @@ if ($is_admin) {
                         }
                     }
                     // تحديث شارة عنصر القائمة "المراسلة الداخلية"
-                    const sideMenuLink = Array.from(document.querySelectorAll('.sidebar-menu a')).find(a => a.getAttribute('href') === 'internal_messages.php');
+                    const sideMenuLink = Array.from(document.querySelectorAll('.sidebar-menu a')).find(a => (a.getAttribute('href') || '').endsWith('/internal_messages.php') || a.getAttribute('href') === 'internal_messages.php');
                     if (sideMenuLink) {
                         let menuBadge = sideMenuLink.querySelector('.badge-notify');
                         if (total > 0) {
@@ -1747,43 +1922,213 @@ if ($is_admin) {
             max-height: 80vh;
             overflow-y: auto;
         }
+
+        .app-toast.toast {
+            min-width: 330px;
+            max-width: 420px;
+            border-radius: 22px;
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.16) !important;
+            background: rgba(255, 255, 255, 0.96) !important;
+            color: #0f172a !important;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 22px 48px rgba(15, 23, 42, 0.18);
+            opacity: 1;
+        }
+
+        .app-toast .toast-body {
+            padding: 0.95rem 1rem;
+        }
+
+        .app-toast .btn-close {
+            opacity: 0.78;
+            filter: none;
+        }
+
+        .app-toast[data-toast-type="success"] {
+            border-inline-start: 4px solid #10b981 !important;
+        }
+
+        .app-toast[data-toast-type="danger"] {
+            border-inline-start: 4px solid #ef4444 !important;
+        }
+
+        .app-toast[data-toast-type="warning"] {
+            border-inline-start: 4px solid #f59e0b !important;
+        }
+
+        .app-toast[data-toast-type="info"] {
+            border-inline-start: 4px solid #3b82f6 !important;
+        }
+
+        .app-toast[data-toast-type="success"] #toastIcon {
+            color: #10b981;
+        }
+
+        .app-toast[data-toast-type="danger"] #toastIcon {
+            color: #ef4444;
+        }
+
+        .app-toast[data-toast-type="warning"] #toastIcon {
+            color: #f59e0b;
+        }
+
+        .app-toast[data-toast-type="info"] #toastIcon {
+            color: #3b82f6;
+        }
+
+        .alert {
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+            backdrop-filter: blur(10px);
+        }
+
+        .alert-success {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(5, 150, 105, 0.08));
+            color: #065f46;
+            border-color: rgba(16, 185, 129, 0.16);
+        }
+
+        .alert-danger {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(220, 38, 38, 0.08));
+            color: #991b1b;
+            border-color: rgba(239, 68, 68, 0.16);
+        }
+
+        .alert-warning {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(217, 119, 6, 0.08));
+            color: #92400e;
+            border-color: rgba(245, 158, 11, 0.18);
+        }
+
+        .alert-info {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(37, 99, 235, 0.08));
+            color: #1d4ed8;
+            border-color: rgba(59, 130, 246, 0.16);
+        }
+
+        .alert .btn-close {
+            opacity: 0.72;
+        }
+
+        .swal2-popup.app-swal-popup {
+            border-radius: 26px;
+            padding: 1.15rem 1.15rem 1.35rem;
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 28px 70px rgba(15, 23, 42, 0.24);
+        }
+
+        .swal2-title.app-swal-title {
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: inherit;
+        }
+
+        .swal2-html-container.app-swal-html {
+            font-size: 0.97rem;
+            line-height: 1.8;
+            color: inherit;
+        }
+
+        .swal2-actions.app-swal-actions {
+            gap: 0.6rem;
+        }
+
+        .swal2-styled.app-swal-confirm,
+        .swal2-styled.app-swal-cancel,
+        .swal2-styled.app-swal-deny {
+            border-radius: 999px !important;
+            padding: 0.72rem 1.25rem !important;
+            font-weight: 800 !important;
+            box-shadow: none !important;
+        }
+
+        .swal2-icon.app-swal-icon {
+            margin-top: 0.35rem;
+            margin-bottom: 0.4rem;
+        }
+
+        .swal2-toast.app-swal-popup {
+            border-radius: 18px;
+            padding: 0.7rem 0.85rem;
+            box-shadow: 0 18px 42px rgba(15, 23, 42, 0.22);
+        }
+
+        body.theme-dark .app-toast.toast,
+        body.dark-mode .app-toast.toast {
+            background: rgba(15, 23, 42, 0.94) !important;
+            color: #e2e8f0 !important;
+            border-color: rgba(148, 163, 184, 0.12) !important;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        body.theme-dark .app-toast .btn-close,
+        body.dark-mode .app-toast .btn-close {
+            filter: invert(1) grayscale(1);
+        }
+
+        body.theme-dark .alert,
+        body.dark-mode .alert {
+            color: #e2e8f0;
+            border-color: rgba(148, 163, 184, 0.12);
+            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
+        }
+
+        body.theme-dark .alert-success,
+        body.dark-mode .alert-success {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(6, 95, 70, 0.2));
+            color: #d1fae5;
+        }
+
+        body.theme-dark .alert-danger,
+        body.dark-mode .alert-danger {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.16), rgba(127, 29, 29, 0.2));
+            color: #fee2e2;
+        }
+
+        body.theme-dark .alert-warning,
+        body.dark-mode .alert-warning {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(120, 53, 15, 0.2));
+            color: #fef3c7;
+        }
+
+        body.theme-dark .alert-info,
+        body.dark-mode .alert-info {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(30, 64, 175, 0.2));
+            color: #dbeafe;
+        }
+
+        body.theme-dark .swal2-popup.app-swal-popup,
+        body.dark-mode .swal2-popup.app-swal-popup {
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(11, 18, 32, 0.98)) !important;
+            color: #e2e8f0 !important;
+            border-color: rgba(148, 163, 184, 0.12);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+        }
+
+        body.theme-dark .swal2-html-container.app-swal-html,
+        body.theme-dark .swal2-title.app-swal-title,
+        body.dark-mode .swal2-html-container.app-swal-html,
+        body.dark-mode .swal2-title.app-swal-title {
+            color: #e2e8f0 !important;
+        }
     </style>
     <!-- Toast Notification Container -->
     <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 9999;">
-        <div id="liveToast" class="toast align-items-center text-white border-0 shadow-lg rounded-4" role="alert" aria-live="assertive" aria-atomic="true">
+        <div id="liveToast" class="app-toast toast align-items-center border-0 shadow-lg" data-toast-type="success" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="d-flex">
                 <div class="toast-body d-flex align-items-center">
                     <i id="toastIcon" class="fas fa-check-circle me-2 fs-5"></i>
                     <span id="toastMessage" class="fw-bold"></span>
                 </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
         </div>
     </div>
 
-    <style>
-        .toast {
-            min-width: 300px;
-            backdrop-filter: blur(10px);
-            opacity: 0.95;
-            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-        }
-
-        .toast.bg-success {
-            background: linear-gradient(135deg, #28a745, #20c997) !important;
-        }
-
-        .toast.bg-danger {
-            background: linear-gradient(135deg, #dc3545, #f86c6b) !important;
-        }
-
-        .toast.bg-warning {
-            background: linear-gradient(135deg, #ffc107, #ffdb4d) !important;
-            color: #333 !important;
-        }
-    </style>
-
-    <link rel="stylesheet" href="../assets/css/mobile-fix.css">
+    <link rel="stylesheet" href="../assets/css/mobile-fix.css?v=<?php echo time(); ?>">
     <style>
         /* Modern Permission Styles */
         .perm-title {
@@ -1924,6 +2269,17 @@ if ($is_admin) {
         body.theme-dark div.form-switch:not(.perm-card) .form-check-input:not(:checked)::after {
             background: #d0d5dd;
         }
+
+        body.theme-dark .form-check.form-switch .form-check-label,
+        body.theme-dark .form-switch-container .form-switch .form-check-label,
+        body.theme-dark div.form-switch:not(.perm-card) .form-check-label {
+            color: #e2e8f0 !important;
+        }
+        
+        body.theme-dark .text-muted,
+        body.theme-dark small.text-muted {
+            color: #94a3b8 !important;
+        }
     </style>
 </head>
 
@@ -1966,11 +2322,11 @@ if ($is_admin) {
             </div>
         </div>
         <div class="sidebar-menu">
-            <a href="currency_exchange_tool.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'currency_exchange_tool.php' || basename($_SERVER['PHP_SELF']) == 'exchange_reports.php' ? 'active' : ''; ?>">
+            <a href="currency_exchange.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'currency_exchange.php' || basename($_SERVER['PHP_SELF']) == 'exchange_reports.php' ? 'active' : ''; ?>">
                 <span class="menu-icon"><i class="fas fa-money-bill-transfer"></i></span>
                 تصريف العملات
             </a>
-            <?php if (basename($_SERVER['PHP_SELF']) == 'currency_exchange_tool.php' || basename($_SERVER['PHP_SELF']) == 'exchange_reports.php'): ?>
+            <?php if (basename($_SERVER['PHP_SELF']) == 'currency_exchange.php' || basename($_SERVER['PHP_SELF']) == 'exchange_reports.php'): ?>
                 <a href="exchange_reports.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'exchange_reports.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
                     <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-chart-line"></i></span>
                     تقارير الصرف
@@ -1983,20 +2339,38 @@ if ($is_admin) {
                 الرئيسية
             </a>
 
+            <!-- وحدة CRM -->
+            <?php if (is_crm_enabled()): ?>
+            <a href="crm/index.php" class="<?php echo (strpos($_SERVER['PHP_SELF'], 'crm/') !== false) ? 'active' : ''; ?>">
+                <span class="menu-icon"><i class="fas fa-comments"></i></span>
+                وحدة CRM
+            </a>
+            <?php endif; ?>
+
             <!-- نظام السفر الجديد (مقسم) -->
             <?php if (has_permission('umrah_view')): ?>
-                <a href="umrah.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah.php' ? 'active' : ''; ?>">
-                    <span class="menu-icon"><i class="fas fa-kaaba text-primary"></i></span>
-                    قسم العمرة
-                </a>
-                <a href="umrah_hosts.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah_hosts.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
-                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-house-user"></i></span>
-                    إدارة المستضيفين
-                </a>
-                <a href="umrah_guarantors.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah_guarantors.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
-                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-user-shield"></i></span>
-                    إدارة الضامنين
-                </a>
+                <?php if (get_module_status($pdo, 'enable_umrah')): ?>
+                    <a href="umrah.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah.php' ? 'active' : ''; ?>">
+                        <span class="menu-icon"><i class="fas fa-kaaba text-primary"></i></span>
+                        قسم العمرة
+                    </a>
+                <?php endif; ?>
+                <?php if (get_module_status($pdo, 'enable_hajj')): ?>
+                    <a href="hajj.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'hajj.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                        <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-mosque text-primary"></i></span>
+                        خدمات الحج
+                    </a>
+                <?php endif; ?>
+                <?php if (get_module_status($pdo, 'enable_umrah')): ?>
+                    <a href="umrah_hosts.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah_hosts.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                        <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-house-user"></i></span>
+                        إدارة المستضيفين
+                    </a>
+                    <a href="umrah_guarantors.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'umrah_guarantors.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                        <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-user-shield"></i></span>
+                        إدارة الضامنين
+                    </a>
+                <?php endif; ?>
             <?php endif; ?>
 
             <?php if (has_permission('passport_transactions_view') && get_module_status($pdo, 'enable_passport_transactions')): ?>
@@ -2013,29 +2387,63 @@ if ($is_admin) {
                 </a>
             <?php endif; ?>
 
-            <?php if (has_permission('bookings_view') && get_module_status($pdo, 'enable_bus_flight_bookings')): ?>
+            <?php if (has_permission('bookings_view') && (get_module_status($pdo, 'enable_bus_bookings') || get_module_status($pdo, 'enable_flight_bookings'))): ?>
                 <a href="bus_flight_bookings.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'bus_flight_bookings.php' ? 'active' : ''; ?>">
                     <span class="menu-icon"><i class="fas fa-route"></i></span>
                     حجوزات الباصات والطيران
                 </a>
+                <?php if (get_module_status($pdo, 'enable_flight_bookings')): ?>
+                    <a href="flight_bookings.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'flight_bookings.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                        <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-plane-departure"></i></span>
+                        حجوزات الطيران
+                    </a>
+                <?php endif; ?>
+                <?php if (get_module_status($pdo, 'enable_bus_bookings')): ?>
+                    <a href="bus_bookings.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'bus_bookings.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                        <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-bus"></i></span>
+                        حجوزات الباصات
+                    </a>
+                <?php endif; ?>
                 <a href="bus_flight_bookings_reports.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'bus_flight_bookings_reports.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
                     <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-chart-line"></i></span>
                     تقارير الحجوزات
                 </a>
+                <a href="booking_tickets.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'booking_tickets.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-ticket-alt text-info"></i></span>
+                    التذاكر الرقمية
+                </a>
+                <a href="booking_modifications.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'booking_modifications.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-edit text-warning"></i></span>
+                    طلبات تعديل الحجوزات
+                </a>
+                <a href="booking_refunds.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'booking_refunds.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-hand-holding-usd text-success"></i></span>
+                    طلبات الاسترداد المالي
+                </a>
+                <a href="booking_notifications.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'booking_notifications.php' ? 'active' : ''; ?>" style="padding-right: 30px; font-size: 0.8rem;">
+                    <span class="menu-icon" style="width: 24px; height: 24px; font-size: 0.7rem;"><i class="fas fa-bell text-primary"></i></span>
+                    إشعارات الحجوزات
+                </a>
             <?php endif; ?>
 
-            <?php if (has_permission('work_visa_view') && ($settings['enable_work_visa'] ?? 1)): ?>
+            <?php if (has_permission('work_visa_view') && get_module_status($pdo, 'enable_work_visa')): ?>
                 <a href="work_visa.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'work_visa.php' ? 'active' : ''; ?>">
                     <span class="menu-icon"><i class="fas fa-briefcase text-success"></i></span>
                     تأشيرة العمل
                 </a>
             <?php endif; ?>
 
-            <?php if (has_permission('family_visit_view') && ($settings['enable_family_visit'] ?? 0)): ?>
+            <?php if (has_permission('family_visit_view') && get_module_status($pdo, 'enable_family_visit')): ?>
                 <a href="family_visit.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'family_visit.php' ? 'active' : ''; ?>">
                     <span class="menu-icon"><i class="fas fa-users text-info"></i></span>
                     الزيارة العائلية
                 </a>
+                <?php if (get_module_status($pdo, 'enable_postal_services')): ?>
+                    <a href="postal_services.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'postal_services.php' ? 'active' : ''; ?>">
+                        <span class="menu-icon"><i class="fas fa-box text-warning"></i></span>
+                        خدمات البريد
+                    </a>
+                <?php endif; ?>
             <?php endif; ?>
 
             <!-- نظام السفر -->

@@ -35,8 +35,11 @@ require_once 'header.php';
                         <a href="currencies.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-money-bill-wave me-2 text-success"></i> إدارة العملات وأسعار الصرف
                         </a>
-                        <a href="branches.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
+                        <a href="manage_branches.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-code-branch me-2 text-info"></i> إدارة الفروع والمكاتب
+                        </a>
+                        <a href="branches.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
+                            <i class="fas fa-book me-2 text-secondary"></i> حسابات الفروع (الحسابات المالية)
                         </a>
                         <a href="countries.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-globe me-2 text-success"></i> إدارة الدول
@@ -66,11 +69,20 @@ require_once 'header.php';
                         <a href="employees.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-id-card me-2 text-info"></i> سجل الموظفين
                         </a>
+                        <a href="attendance_dashboard.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
+                            <i class="fas fa-chart-line me-2 text-purple"></i> لوحة إحصائيات الحضور
+                        </a>
                         <a href="attendance_report.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-clipboard-list me-2 text-warning"></i> تقرير سجل الدوام
                         </a>
                         <a href="job_settings.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
                             <i class="fas fa-briefcase me-2 text-success"></i> الرواتب وفترات الدوام
+                        </a>
+                        <a href="user_activity_log.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
+                            <i class="fas fa-history me-2 text-secondary"></i> سجل المستخدمين والنشاط
+                        </a>
+                        <a href="user_sessions.php" class="list-group-item list-group-item-action border-0 py-3 rounded-3 mb-2 bg-light">
+                            <i class="fas fa-users-cog me-2 text-info"></i> إدارة الجلسات
                         </a>
                     </div>
                 </div>

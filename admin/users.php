@@ -20,6 +20,10 @@ $employees_list = $pdo->query("SELECT id, full_name FROM employees WHERE deleted
 // جلب الحسابات المالية (الصناديق والبنوك) للمودال من النظام الموحد
 $cash_bank_accounts = $pdo->query("SELECT id, account_name_ar as account_name FROM unified_accounts WHERE (account_code LIKE '101%' OR account_code LIKE '102%') AND is_active = 1 ORDER BY account_name_ar")->fetchAll();
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة مستخدم جديد
 if (isset($_POST['add_user'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -139,12 +143,15 @@ if (isset($_POST['update_user'])) {
     }
 }
 
-// حذف مستخدم
-if (isset($_GET['delete'])) {
+// حذف مستخدم عبر POST + CSRF
+if (isset($_POST['delete_user'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='users.php';</script>");
+    }
     if (!has_permission('users_delete')) {
         $error = "ليس لديك صلاحية لحذف المستخدم";
     } else {
-        $user_id = $_GET['delete'];
+        $user_id = (int)$_POST['delete_user'];
         if ($user_id != $_SESSION['admin_id']) {
             if (is_user_involved_in_any_transaction($pdo, $user_id)) {
                 $error = "لا يمكن حذف المستخدم لارتباطه بسجلات وعمليات قائمة.";
@@ -220,6 +227,68 @@ foreach ($users_raw as $user) {
 ?>
 
 <div class="container-fluid py-4">
+    <style>
+        #addUserModal .modal-content,
+        [id^="editUserModal"] .modal-content {
+            overflow: hidden;
+        }
+
+        #addUserModal .modal-content > form,
+        [id^="editUserModal"] .modal-content > form {
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 3.5rem);
+            min-height: 0;
+        }
+
+        #addUserModal .modal-body,
+        [id^="editUserModal"] .modal-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+        }
+
+        #addUserModal .modal-footer,
+        [id^="editUserModal"] .modal-footer {
+            flex: 0 0 auto;
+            position: sticky;
+            bottom: 0;
+            z-index: 3;
+            border-top: 1px solid #e2e8f0 !important;
+            box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.08) !important;
+        }
+
+        #addUserModal .modal-footer .btn,
+        [id^="editUserModal"] .modal-footer .btn {
+            min-width: 130px;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 576px) {
+            #addUserModal .modal-dialog,
+            [id^="editUserModal"] .modal-dialog {
+                margin: 0.5rem;
+            }
+
+            #addUserModal .modal-content > form,
+            [id^="editUserModal"] .modal-content > form {
+                max-height: calc(100vh - 1rem);
+            }
+
+            #addUserModal .modal-footer,
+            [id^="editUserModal"] .modal-footer {
+                gap: 0.5rem;
+                justify-content: stretch;
+            }
+
+            #addUserModal .modal-footer .btn,
+            [id^="editUserModal"] .modal-footer .btn {
+                flex: 1 1 0;
+                padding-inline: 0.75rem !important;
+            }
+        }
+    </style>
+
     <!-- حاوية التنبيهات (Toast Container) -->
     <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 9999;">
         <?php if (isset($_GET['success']) || isset($error)): ?>
@@ -344,13 +413,25 @@ foreach ($users_raw as $user) {
                                 </td>
                                 <td>
                                     <?php if ($user['status'] == 'active'): ?>
-                                        <a href="ajax_toggle_status.php?entity=users&id=<?php echo $user['id']; ?>&status=inactive" class="status-toggle-badge active">
-                                            <i class="fas fa-check-circle"></i> نشط
-                                        </a>
+                                        <form method="POST" action="ajax_toggle_status.php" class="d-inline-block mb-0">
+                                            <?php echo csrf_input(); ?>
+                                            <input type="hidden" name="entity" value="users">
+                                            <input type="hidden" name="id" value="<?php echo $user['id']; ?>">
+                                            <input type="hidden" name="status" value="inactive">
+                                            <button type="submit" class="status-toggle-badge active border-0 bg-transparent p-0">
+                                                <i class="fas fa-check-circle"></i> نشط
+                                            </button>
+                                        </form>
                                     <?php else: ?>
-                                        <a href="ajax_toggle_status.php?entity=users&id=<?php echo $user['id']; ?>&status=active" class="status-toggle-badge inactive">
-                                            <i class="fas fa-times-circle"></i> معطل
-                                        </a>
+                                        <form method="POST" action="ajax_toggle_status.php" class="d-inline-block mb-0">
+                                            <?php echo csrf_input(); ?>
+                                            <input type="hidden" name="entity" value="users">
+                                            <input type="hidden" name="id" value="<?php echo $user['id']; ?>">
+                                            <input type="hidden" name="status" value="active">
+                                            <button type="submit" class="status-toggle-badge inactive border-0 bg-transparent p-0">
+                                                <i class="fas fa-times-circle"></i> معطل
+                                            </button>
+                                        </form>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-center">
@@ -368,7 +449,13 @@ foreach ($users_raw as $user) {
                                                 <li>
                                                     <hr class="dropdown-divider">
                                                 </li>
-                                                <li><a class="dropdown-item text-danger" href="users.php?delete=<?php echo $user['id']; ?>" onclick="return confirm('هل أنت متأكد من حذف هذا المستخدم؟')"><i class="fas fa-trash me-2"></i> حذف المستخدم</a></li>
+                                                <li>
+                                                    <form method="POST" class="mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا المستخدم؟')">
+                                                        <?php echo csrf_input(); ?>
+                                                        <input type="hidden" name="delete_user" value="<?php echo $user['id']; ?>">
+                                                        <button type="submit" class="dropdown-item text-danger"><i class="fas fa-trash me-2"></i> حذف المستخدم</button>
+                                                    </form>
+                                                </li>
                                             <?php endif; ?>
                                         </ul>
                                     </div>

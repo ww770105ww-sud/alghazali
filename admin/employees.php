@@ -39,6 +39,10 @@ if (!has_permission('employees_view')) {
     die("غير مصرح لك بالوصول لهذه الصفحة.");
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // جلب الفروع
 $branches = $pdo->query("SELECT id, branch_name FROM branches WHERE deleted_at IS NULL AND status = 'active'")->fetchAll();
 
@@ -209,12 +213,12 @@ if (isset($_POST['update_employee'])) {
     }
 }
 
-// حذف موظف (أرشفة)
-if (isset($_GET['delete'])) {
+// حذف موظف (أرشفة) عبر POST + CSRF
+if (isset($_POST['delete_employee'])) {
     if (!has_permission('employees_delete')) {
         $error = "ليس لديك صلاحية لحذف الموظف";
     } else {
-        $id = $_GET['delete'];
+        $id = (int)$_POST['delete_employee'];
         try {
             $pdo->beginTransaction();
 
@@ -390,13 +394,25 @@ if (!empty($employee_account_ids)) {
                                 </td>
                                  <td data-label="الحالة">
                                     <?php if ($emp['status'] == 'active'): ?>
-                                        <a href="ajax_toggle_status.php?entity=employees&id=<?php echo $emp['id']; ?>&status=inactive" class="status-toggle-badge active">
-                                            <i class="fas fa-check-circle"></i> على رأس العمل
-                                        </a>
+                                        <form method="POST" action="ajax_toggle_status.php" class="d-inline-block mb-0">
+                                            <?php echo csrf_input(); ?>
+                                            <input type="hidden" name="entity" value="employees">
+                                            <input type="hidden" name="id" value="<?php echo $emp['id']; ?>">
+                                            <input type="hidden" name="status" value="inactive">
+                                            <button type="submit" class="status-toggle-badge active border-0 bg-transparent p-0">
+                                                <i class="fas fa-check-circle"></i> على رأس العمل
+                                            </button>
+                                        </form>
                                     <?php else: ?>
-                                        <a href="ajax_toggle_status.php?entity=employees&id=<?php echo $emp['id']; ?>&status=active" class="status-toggle-badge inactive">
-                                            <i class="fas fa-pause-circle"></i> متوقف
-                                        </a>
+                                        <form method="POST" action="ajax_toggle_status.php" class="d-inline-block mb-0">
+                                            <?php echo csrf_input(); ?>
+                                            <input type="hidden" name="entity" value="employees">
+                                            <input type="hidden" name="id" value="<?php echo $emp['id']; ?>">
+                                            <input type="hidden" name="status" value="active">
+                                            <button type="submit" class="status-toggle-badge inactive border-0 bg-transparent p-0">
+                                                <i class="fas fa-pause-circle"></i> متوقف
+                                            </button>
+                                        </form>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-center pe-4">
@@ -410,7 +426,11 @@ if (!empty($employee_account_ids)) {
                                         <?php endif; ?>
                                         <a href="print_employee_card.php?id=<?php echo $emp['id']; ?>" target="_blank" class="btn btn-sm btn-light rounded-circle me-1" title="طباعة البطاقة"><i class="fas fa-id-card text-success"></i></a>
                                         <button class="btn btn-sm btn-light rounded-circle edit-btn" data-bs-toggle="modal" data-bs-target="#editEmployeeModal<?php echo $emp['id']; ?>" title="تعديل"><i class="fas fa-edit text-primary"></i></button>
-                                        <a href="employees.php?delete=<?php echo $emp['id']; ?>" class="btn btn-sm btn-light rounded-circle ms-1" onclick="return confirm('هل أنت متأكد من حذف هذا الموظف؟ سيتم حذف حسابه المالي أيضاً إذا لم يكن عليه حركات.')" title="حذف"><i class="fas fa-trash text-danger"></i></a>
+                                        <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الموظف؟ سيتم حذف حسابه المالي أيضاً إذا لم يكن عليه حركات.')">
+                                            <?php echo csrf_input(); ?>
+                                            <input type="hidden" name="delete_employee" value="<?php echo $emp['id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-light rounded-circle ms-1" title="حذف"><i class="fas fa-trash text-danger"></i></button>
+                                        </form>
                                     </div>
                                 </td>
                             </tr>

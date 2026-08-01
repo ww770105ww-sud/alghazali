@@ -75,6 +75,7 @@ $query = "
            inv.net_amount AS sale_price,
            inv.amount_received AS sales_received,
            inv.invoice_status AS sales_status,
+           inv.payment_status AS sales_payment_status,
            inv.delivery_type AS sales_delivery_type,
            
            -- بيانات فاتورة الشراء
@@ -83,10 +84,14 @@ $query = "
            pur.total_amount AS purchase_total_amount,
            pur.amount_received AS purchase_received,
            pur.invoice_status AS purchase_status,
+           pur.payment_status AS purchase_payment_status,
+           sup.supplier_name AS purchase_supplier_name,
+           ua.account_code AS sales_account_code,
+           ua.account_name_ar AS sales_account_name,
            
            -- الحسابات المالية الدقيقة (مطابقة لـ invoices.php)
-           (inv.net_amount - inv.amount_received) AS remaining_amount,
-           (inv.net_amount - 
+           (COALESCE(inv.net_amount, inv.total_amount - IFNULL(inv.discount, 0)) - COALESCE(inv.amount_received, 0)) AS remaining_amount,
+           (COALESCE(inv.net_amount, inv.total_amount - IFNULL(inv.discount, 0)) - 
             COALESCE(
                 (pur.total_amount * IFNULL(cpur.exchange_rate_buy, 1) / IFNULL(c.exchange_rate_buy, 1)),
                 inv.cost_amount, 0
@@ -96,12 +101,14 @@ $query = "
            inv.currency_id AS currency_id,
            s.status_name, s.status_color,
            c.currency_name, c.currency_symbol,
+           cpur.currency_symbol AS purchase_currency_symbol,
            b.branch_name,
            a.agent_name,
            u.full_name as created_by_name,
            fc.city_name as from_city_name,
            tc.city_name as to_city_name,
-           serv.service_name
+           serv.service_name AS transaction_service_name,
+                main_serv.service_name AS main_service_name
     FROM passport_transactions pt
     LEFT JOIN invoices inv
         ON (inv.id = pt.sales_invoice_id OR (
@@ -111,6 +118,8 @@ $query = "
         ON (pur.id = pt.purchase_invoice_id OR (
             pur.source_type = 'passport_transaction' AND pur.source_id = pt.id AND pur.invoice_category = 'purchase'
         ))
+    LEFT JOIN suppliers sup ON pur.supplier_id = sup.id
+    LEFT JOIN unified_accounts ua ON inv.account_id = ua.id
     LEFT JOIN statuses s ON pt.status_id = s.id
     LEFT JOIN currencies c ON inv.currency_id = c.id
     LEFT JOIN currencies cpur ON pur.currency_id = cpur.id
@@ -120,6 +129,8 @@ $query = "
     LEFT JOIN cities fc ON pt.from_city_id = fc.id
     LEFT JOIN cities tc ON pt.to_city_id = tc.id
     LEFT JOIN services serv ON pt.service_id = serv.id
+    LEFT JOIN passport_transaction_types ptt ON pt.transaction_type_id = ptt.id
+    LEFT JOIN services main_serv ON ptt.service_id = main_serv.id
 ";
 
 if (!empty($where_clauses)) {
@@ -147,8 +158,8 @@ foreach ($transactions as $t) {
     } else {
         $stats['pending']++;
     }
-    $stats['total_sales'] += $t['sale_price'];
-    $stats['total_profit'] += $t['profit'];
+    $stats['total_sales'] += (float)($t['sale_price'] ?? 0);
+    $stats['total_profit'] += (float)($t['profit'] ?? 0);
 }
 
 // Flash message
@@ -174,6 +185,111 @@ if (isset($_SESSION['flash_message'])) {
     unset($_SESSION['flash_message']);
 }
 ?>
+
+<style>
+    .finance-mini-card {
+        border-radius: 18px;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(248, 250, 252, 0.86);
+        min-width: 165px;
+    }
+
+    body.theme-dark .finance-mini-card {
+        background: rgba(30, 41, 59, 0.85);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .finance-mini-card .mini-label {
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        margin-bottom: 0.18rem;
+    }
+
+    .finance-mini-card .mini-name {
+        font-size: 0.9rem;
+        font-weight: 800;
+        color: var(--text-bold);
+        line-height: 1.5;
+        margin-bottom: 0.45rem;
+    }
+
+    .finance-mini-card .mini-amount {
+        font-size: 1.02rem;
+        font-weight: 900;
+        color: #2563eb;
+    }
+
+    .route-stack {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.3rem;
+        min-width: 120px;
+        padding: 0.5rem 0.75rem;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(248, 250, 252, 0.72);
+    }
+
+    body.theme-dark .route-stack {
+        background: rgba(30, 41, 59, 0.78);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .route-city {
+        font-size: 0.82rem;
+        line-height: 1.45;
+        text-align: center;
+    }
+
+    .route-city.from {
+        color: var(--text-muted);
+        font-weight: 600;
+    }
+
+    .route-city.to {
+        color: var(--text-bold);
+        font-weight: 800;
+    }
+
+    .route-arrow {
+        color: #2563eb;
+        opacity: 0.7;
+        font-size: 0.95rem;
+        line-height: 1;
+    }
+
+    .payment-stack {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+    }
+
+    @media (max-width: 1200px) {
+        .payment-stack {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .payment-box {
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 0.75rem;
+        padding: 0.5rem;
+        background: rgba(255, 255, 255, 0.7);
+    }
+
+    body.theme-dark .payment-box {
+        background: rgba(30, 41, 59, 0.78);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .payment-box-title {
+        font-size: 0.75rem;
+        font-weight: 800;
+        margin-bottom: 0.35rem;
+    }
+</style>
 
 <div class="container-fluid py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
@@ -294,7 +410,9 @@ if (isset($_SESSION['flash_message'])) {
                             <th class="border-0 text-secondary small text-uppercase fw-bold">العميل / المسافر</th>
                             <th class="border-0 text-secondary small text-uppercase fw-bold">نوع المعاملة</th>
                             <th class="border-0 text-secondary small text-uppercase fw-bold">خط السير</th>
-                            <th class="border-0 text-secondary small text-uppercase fw-bold">البيانات المالية</th>
+                            <th class="border-0 text-secondary small text-uppercase fw-bold">المورد والشراء</th>
+                            <th class="border-0 text-secondary small text-uppercase fw-bold">الحساب والبيع</th>
+                            <th class="border-0 text-secondary small text-uppercase fw-bold">حالة الدفع والترحيل</th>
                             <th class="border-0 text-secondary small text-uppercase fw-bold">الحالة</th>
                             <th class="text-center border-0 text-secondary small text-uppercase fw-bold">الإجراءات</th>
                         </tr>
@@ -302,7 +420,7 @@ if (isset($_SESSION['flash_message'])) {
                     <tbody>
                         <?php if (empty($transactions)): ?>
                             <tr>
-                                <td colspan="7" class="text-center py-5 text-muted">
+                                <td colspan="9" class="text-center py-5 text-muted">
                                     <i class="fas fa-folder-open fa-3x mb-3 d-block"></i>
                                     لا توجد معاملات حالياً
                                 </td>
@@ -333,103 +451,92 @@ if (isset($_SESSION['flash_message'])) {
                                         <span class="badge bg-secondary bg-opacity-10 text-secondary rounded-pill small"><?php echo $type_label; ?></span>
                                     </td>
                                     <td>
-                                        <div class="extra-small">
-                                            <span class="text-muted"><?php echo htmlspecialchars($t['from_city_name']); ?></span>
-                                            <i class="fas fa-long-arrow-alt-left mx-1 text-primary opacity-50"></i>
-                                            <span class="fw-bold"><?php echo htmlspecialchars($t['to_city_name']); ?></span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="fw-bold small text-dark mb-1">
-                                            <?php echo number_format($t['sale_price'], 2); ?> <small><?php echo $t['currency_symbol']; ?></small>
-                                            <span class="badge bg-success-subtle text-success ms-1" style="font-size: 10px;">بيع</span>
-                                        </div>
-                                        <?php if ($t['purchase_invoice_id']): ?>
-                                            <div class="extra-small text-danger mb-1">
-                                                <?php echo number_format($t['purchase_total_amount'], 2); ?> <small><?php echo $t['currency_symbol']; ?></small>
-                                                <span class="badge bg-danger-subtle text-danger ms-1" style="font-size: 10px;">شراء</span>
+                                        <?php
+                                        $fromCity = trim((string)($t['from_city_name'] ?? ''));
+                                        $toCity = trim((string)($t['to_city_name'] ?? ''));
+                                        ?>
+                                        <?php if ($fromCity === '' && $toCity === ''): ?>
+                                            <span class="text-muted small">---</span>
+                                        <?php else: ?>
+                                            <div class="route-stack">
+                                                <div class="route-city from"><?php echo htmlspecialchars($fromCity !== '' ? $fromCity : '---'); ?></div>
+                                                <div class="route-arrow"><i class="fas fa-arrow-down"></i></div>
+                                                <div class="route-city to"><?php echo htmlspecialchars($toCity !== '' ? $toCity : '---'); ?></div>
                                             </div>
                                         <?php endif; ?>
-                                        <div class="extra-small text-muted border-top pt-1 mt-1 mb-1">
-                                            المتبقي: <span class="fw-bold text-<?php echo $t['remaining_amount'] > 0 ? 'danger' : 'success'; ?>"><?php echo number_format($t['remaining_amount'], 2); ?> <small><?php echo $t['currency_symbol']; ?></small></span>
-                                        </div>
-                                        <?php if ($t['sales_status'] == 'posted'): ?>
-                                            <?php 
-                                            $payment_status = '';
-                                            $payment_status_class = '';
-                                            if ($t['sales_received'] >= $t['sale_price'] && $t['sale_price'] > 0):
-                                                $payment_status = 'مدفوع بالكامل';
-                                                $payment_status_class = 'bg-success';
-                                            elseif ($t['sales_received'] > 0):
-                                                $payment_status = 'مدفوع جزئياً';
-                                                $payment_status_class = 'bg-warning text-dark';
-                                            else:
-                                                $payment_status = 'غير مدفوع';
-                                                $payment_status_class = 'bg-danger';
-                                            endif;
-                                            ?>
-                                            <span class="badge <?php echo $payment_status_class; ?> rounded-pill extra-small w-100">
-                                                <?php echo $payment_status; ?>
-                                            </span>
-                                        <?php endif; ?>
                                     </td>
                                     <td>
-                                        <div class="d-flex flex-column gap-1 align-items-center">
-                                            <!-- حالة المعاملة -->
-                                            <span class="badge bg-<?php echo $t['status_color'] ?: 'primary'; ?> rounded-pill extra-small w-100">
-                                                <?php echo htmlspecialchars($t['status_name']); ?>
-                                            </span>
-
-                                            <!-- حالة فاتورة البيع -->
-                                            <?php if ($t['sales_invoice_id']): ?>
-                                                <?php
-                                                $s_status_class = 'bg-warning text-dark';
-                                                $s_status_text = 'مسودة';
-                                                if ($t['sales_status'] == 'posted') {
-                                                    $s_status_class = 'bg-success';
-                                                    $s_status_text = 'مرحل';
-                                                } elseif ($t['sales_status'] == 'cancelled') {
-                                                    $s_status_class = 'bg-danger';
-                                                    $s_status_text = 'ملغي';
-                                                }
-                                                ?>
-                                                <div class="d-flex align-items-center gap-1 w-100">
-                                                    <span class="badge <?php echo $s_status_class; ?> extra-small flex-grow-1" style="font-size: 9px;">البيع: <?php echo $s_status_text; ?></span>
-                                                    <?php if ($t['sales_status'] == 'posted'): ?>
-                                                        <?php if ($t['sales_received'] >= $t['sale_price'] && $t['sale_price'] > 0): ?>
-                                                            <i class="fas fa-check-circle text-success fs-xs" title="مدفوع بالكامل"></i>
-                                                        <?php elseif ($t['sales_received'] > 0): ?>
-                                                            <i class="fas fa-adjust text-info fs-xs" title="مدفوع جزئياً"></i>
-                                                        <?php endif; ?>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endif; ?>
-
-                                            <!-- حالة فاتورة الشراء -->
-                                            <?php if ($t['purchase_invoice_id']): ?>
-                                                <?php
-                                                $p_status_class = 'bg-warning text-dark';
-                                                $p_status_text = 'مسودة';
-                                                if ($t['purchase_status'] == 'posted') {
-                                                    $p_status_class = 'bg-success';
-                                                    $p_status_text = 'مرحل';
-                                                } elseif ($t['purchase_status'] == 'cancelled') {
-                                                    $p_status_class = 'bg-danger';
-                                                    $p_status_text = 'ملغي';
-                                                }
-                                                ?>
-                                                <div class="d-flex align-items-center gap-1 w-100">
-                                                    <span class="badge <?php echo $p_status_class; ?> extra-small flex-grow-1" style="font-size: 9px;">الشراء: <?php echo $p_status_text; ?></span>
-                                                    <?php if ($t['purchase_status'] == 'posted'): ?>
-                                                        <?php if ($t['purchase_received'] >= $t['purchase_total_amount'] && $t['purchase_total_amount'] > 0): ?>
-                                                            <i class="fas fa-check-circle text-success fs-xs" title="مسدد للمورد"></i>
-                                                        <?php endif; ?>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endif; ?>
+                                        <?php $purchaseCurrencyMark = trim((string)($t['purchase_currency_symbol'] ?? ($t['currency_symbol'] ?? ''))); ?>
+                                        <div class="finance-mini-card">
+                                            <div class="mini-label">المورد</div>
+                                            <div class="mini-name clamp-2"><?php echo htmlspecialchars($t['purchase_supplier_name'] ?: '---'); ?></div>
+                                            <div class="mini-label">سعر الشراء</div>
+                                            <div class="mini-amount" style="color:#dc2626;">
+                                                <?php echo $t['purchase_invoice_id'] ? number_format((float)$t['purchase_total_amount'], 2) : '---'; ?>
+                                                <?php echo $t['purchase_invoice_id'] && $purchaseCurrencyMark !== '' ? ' ' . htmlspecialchars($purchaseCurrencyMark) : ''; ?>
+                                            </div>
                                         </div>
                                     </td>
+                                    <td>
+                                        <?php
+                                        $accLabel = trim((string)($t['sales_account_code'] ?? ''));
+                                        $accName = trim((string)($t['sales_account_name'] ?? ''));
+                                        $accDisplay = $accName !== '' ? $accName : '---';
+                                        $saleNet = (float)($t['sale_price'] ?? 0);
+                                        $salesCurrencyMark = trim((string)($t['currency_symbol'] ?? ''));
+                                        ?>
+                                        <div class="finance-mini-card">
+                                            <div class="mini-label">الحساب المتأثر</div>
+                                            <div class="mini-name clamp-2"><?php echo htmlspecialchars($accDisplay); ?></div>
+                                            <div class="mini-label">سعر البيع</div>
+                                            <div class="mini-amount" style="color:#16a34a;">
+                                                <?php echo number_format($saleNet, 2); ?>
+                                                <?php echo $salesCurrencyMark !== '' ? ' ' . htmlspecialchars($salesCurrencyMark) : ''; ?>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $pay_badges = [
+                                            'unpaid' => '<span class="badge bg-danger-subtle text-danger rounded-pill">غير مدفوع</span>',
+                                            'partial' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
+                                            'partially_paid' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
+                                            'fully_paid' => '<span class="badge bg-success-subtle text-success rounded-pill">مدفوع بالكامل</span>',
+                                            'awaiting_approval' => '<span class="badge bg-info-subtle text-info rounded-pill">بانتظار الاعتماد</span>',
+                                            'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل مالياً</span>'
+                                        ];
+                                        $invoice_badges = [
+                                            'draft' => '<span class="badge bg-secondary-subtle text-secondary rounded-pill">مسودة</span>',
+                                            'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل</span>',
+                                            'cancelled' => '<span class="badge bg-danger-subtle text-danger rounded-pill">ملغي</span>'
+                                        ];
+                                        ?>
+                                        <div class="payment-stack">
+                                            <div class="payment-box small">
+                                                <div class="payment-box-title text-success">البيع</div>
+                                                <div class="d-flex flex-wrap gap-1">
+                                                    <?php echo $pay_badges[$t['sales_payment_status'] ?? 'unpaid'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                                    <?php echo $invoice_badges[$t['sales_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                                </div>
+                                            </div>
+                                            <div class="payment-box small">
+                                                <div class="payment-box-title text-primary">الشراء</div>
+                                                <div class="d-flex flex-wrap gap-1">
+                                                    <?php echo !empty($t['purchase_invoice_id']) ? ($pay_badges[$t['purchase_payment_status'] ?? 'unpaid'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : '<span class="badge bg-light text-dark rounded-pill">لا توجد</span>'; ?>
+                                                    <?php echo !empty($t['purchase_invoice_id']) ? ($invoice_badges[$t['purchase_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : ''; ?>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-<?php echo $t['status_color'] ?: 'primary'; ?> rounded-pill extra-small w-100">
+                                            <?php echo htmlspecialchars($t['status_name']); ?>
+                                        </span>
+                                    </td>
                                     <td class="text-center">
+                                        <?php
+                                        $hasPostedInvoice = (($t['sales_status'] ?? '') === 'posted') || (!empty($t['purchase_invoice_id']) && (($t['purchase_status'] ?? '') === 'posted'));
+                                        ?>
                                         <div class="d-flex justify-content-center gap-1">
                                             <?php if (has_permission('passport_transactions_view_details')): ?>
                                                 <a href="passport_transaction_view.php?id=<?php echo $t['id']; ?>" class="btn btn-sm btn-light rounded-circle shadow-sm" title="عرض التفاصيل">
@@ -437,7 +544,7 @@ if (isset($_SESSION['flash_message'])) {
                                                 </a>
                                             <?php endif; ?>
                                             
-                                            <?php if (has_permission('passport_transactions_edit')): ?>
+                                            <?php if (has_permission('passport_transactions_edit') && !$hasPostedInvoice): ?>
                                                 <a href="passport_transaction_edit.php?id=<?php echo $t['id']; ?>" class="btn btn-sm btn-light rounded-circle shadow-sm" title="تعديل">
                                                     <i class="fas fa-edit text-primary"></i>
                                                 </a>
@@ -449,49 +556,103 @@ if (isset($_SESSION['flash_message'])) {
                                                 </button>
                                             <?php endif; ?>
 
-                                            <!-- ترحيل (قائمة منسدلة) -->
+                                            <!-- زر ترحيل (قائمة منسدلة) -->
                                             <?php if (($t['sales_status'] != 'posted') || ($t['purchase_invoice_id'] && $t['purchase_status'] != 'posted')): ?>
                                                 <div class="dropdown d-inline-block">
-                                                    <button class="btn btn-sm btn-light rounded-circle shadow-sm" type="button" data-bs-toggle="dropdown">
-                                                        <i class="fas fa-check-double text-success"></i>
+                                                    <button class="btn btn-sm btn-success shadow-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                                        <i class="fas fa-check-double"></i>
                                                     </button>
-                                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
-                                                        <li><h6 class="dropdown-header small fw-bold text-muted">ترحيل محاسبي</h6></li>
+                                                    <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
+                                                        <li><h6 class="dropdown-header small fw-bold">ترحيل محاسبي</h6></li>
                                                         <?php if ($t['sales_status'] != 'posted' && $t['purchase_invoice_id'] && $t['purchase_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?post_all=<?php echo $t['sales_invoice_id']; ?>&return_to=passport_transactions.php" onclick="return confirm('ترحيل البيع والشراء معاً؟')"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل الفواتير" data-confirm-text="هل تريد ترحيل البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="post_scope" value="all">
+                                                                    <input type="hidden" name="linked_invoice_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</button>
+                                                                </form>
+                                                            </li>
                                                             <li><hr class="dropdown-divider"></li>
                                                         <?php endif; ?>
 
                                                         <?php if ($t['sales_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $t['sales_invoice_id']; ?>&return_to=passport_transactions.php" onclick="return confirm('ترحيل فاتورة البيع؟')"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة البيع" data-confirm-text="هل تريد ترحيل فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
 
                                                         <?php if ($t['purchase_invoice_id'] && $t['purchase_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $t['purchase_invoice_id']; ?>&return_to=passport_transactions.php" onclick="return confirm('ترحيل فاتورة الشراء؟')"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة الشراء" data-confirm-text="هل تريد ترحيل فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
                                                     </ul>
                                                 </div>
                                             <?php endif; ?>
 
-                                            <!-- إلغاء ترحيل (قائمة منسدلة) -->
+                                            <!-- زر إلغاء الترحيل (قائمة منسدلة) -->
                                             <?php if (($t['sales_status'] == 'posted') || ($t['purchase_invoice_id'] && $t['purchase_status'] == 'posted')): ?>
                                                 <div class="dropdown d-inline-block">
-                                                    <button class="btn btn-sm btn-light rounded-circle shadow-sm" type="button" data-bs-toggle="dropdown">
-                                                        <i class="fas fa-undo text-warning"></i>
+                                                    <button class="btn btn-sm btn-warning text-dark shadow-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" title="إلغاء ترحيل">
+                                                        <i class="fas fa-undo"></i>
                                                     </button>
-                                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
-                                                        <li><h6 class="dropdown-header small fw-bold text-muted">إعادة لمسودة</h6></li>
+                                                    <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
+                                                        <li><h6 class="dropdown-header small fw-bold">إعادة تعيين إلى مسودة (Reset)</h6></li>
                                                         <?php if ($t['sales_status'] == 'posted' && $t['purchase_invoice_id'] && $t['purchase_status'] == 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $t['sales_invoice_id']; ?>&reset_type=all&return_to=passport_transactions.php" onclick="return confirm('إلغاء ترحيل الكل؟')"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل" data-confirm-text="هل تريد إلغاء ترحيل البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="reset_type" value="all">
+                                                                    <input type="hidden" name="linked_invoice_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</button>
+                                                                </form>
+                                                            </li>
                                                             <li><hr class="dropdown-divider"></li>
                                                         <?php endif; ?>
 
                                                         <?php if ($t['sales_status'] == 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $t['sales_invoice_id']; ?>&reset_type=sales&return_to=passport_transactions.php" onclick="return confirm('إلغاء ترحيل فاتورة البيع؟')"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل فاتورة البيع" data-confirm-text="هل تريد إلغاء ترحيل فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="reset_type" value="sales">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
 
                                                         <?php if ($t['purchase_invoice_id'] && $t['purchase_status'] == 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $t['purchase_invoice_id']; ?>&reset_type=purchase&return_to=passport_transactions.php" onclick="return confirm('إلغاء ترحيل فاتورة الشراء؟')"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل فاتورة الشراء" data-confirm-text="هل تريد إلغاء ترحيل فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="reset_type" value="purchase">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
                                                     </ul>
                                                 </div>
@@ -503,25 +664,51 @@ if (isset($_SESSION['flash_message'])) {
                                                 </a>
                                             <?php endif; ?>
 
-                                            <!-- حذف (قائمة منسدلة) - مطابقة لـ invoices.php -->
-                                            <?php if (($t['sales_status'] != 'posted') || ($t['purchase_invoice_id'] && $t['purchase_status'] != 'posted')): ?>
+                                            <!-- زر الحذف (قائمة منسدلة) - يظهر إذا كانت أي فاتورة مسودة -->
+                                            <?php if (!$hasPostedInvoice): ?>
                                                 <div class="dropdown d-inline-block">
-                                                    <button class="btn btn-sm btn-light rounded-circle shadow-sm" type="button" data-bs-toggle="dropdown" title="حذف">
-                                                        <i class="fas fa-trash text-danger"></i>
+                                                    <button class="btn btn-sm btn-danger shadow-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" title="حذف">
+                                                        <i class="fas fa-trash"></i>
                                                     </button>
-                                                    <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
-                                                        <li><h6 class="dropdown-header small fw-bold text-muted">حذف الفاتورة</h6></li>
+                                                    <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
+                                                        <li><h6 class="dropdown-header small fw-bold">خيارات الحذف</h6></li>
                                                         <?php if ($t['sales_status'] != 'posted' && $t['purchase_invoice_id'] && $t['purchase_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small text-danger" href="invoices.php?delete_invoice=<?php echo $t['sales_invoice_id']; ?>&delete_both=<?php echo $t['purchase_invoice_id']; ?>&return_to=passport_transactions.php" onclick="return confirm('حذف البيع والشراء معاً؟')"><i class="fas fa-trash-alt me-2"></i>حذف الكل</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف الفواتير" data-confirm-text="هل تريد حذف فاتورة البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="delete_scope" value="both">
+                                                                    <input type="hidden" name="linked_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small text-danger"><i class="fas fa-trash-alt me-2"></i>حذف الكل (الفواتير)</button>
+                                                                </form>
+                                                            </li>
                                                             <li><hr class="dropdown-divider"></li>
                                                         <?php endif; ?>
-
                                                         <?php if ($t['sales_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $t['sales_invoice_id']; ?>&confirm_linked=1&return_to=passport_transactions.php" onclick="return confirm('حذف فاتورة البيع؟')"><i class="fas fa-trash me-2"></i>حذف البيع</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة البيع" data-confirm-text="هل تريد حذف فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['sales_invoice_id']; ?>">
+                                                                    <input type="hidden" name="delete_scope" value="self">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2 text-primary"></i>حذف فاتورة البيع</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
-
                                                         <?php if ($t['purchase_invoice_id'] && $t['purchase_status'] != 'posted'): ?>
-                                                            <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $t['purchase_invoice_id']; ?>&confirm_linked=1&return_to=passport_transactions.php" onclick="return confirm('حذف فاتورة الشراء؟')"><i class="fas fa-trash me-2 text-warning"></i>حذف الشراء</a></li>
+                                                            <li>
+                                                                <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة الشراء" data-confirm-text="هل تريد حذف فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                    <?php echo csrf_input(); ?>
+                                                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                    <input type="hidden" name="invoice_id" value="<?php echo $t['purchase_invoice_id']; ?>">
+                                                                    <input type="hidden" name="delete_scope" value="self">
+                                                                    <input type="hidden" name="return_to" value="passport_transactions.php">
+                                                                    <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2 text-warning"></i>حذف فاتورة الشراء</button>
+                                                                </form>
+                                                            </li>
                                                         <?php endif; ?>
                                                     </ul>
                                                 </div>
@@ -612,6 +799,52 @@ document.addEventListener('DOMContentLoaded', function() {
             dropdownAutoWidth: true
         });
     }
+
+    // Handle delete forms with SweetAlert
+    document.querySelectorAll('.delete-form').forEach(form => {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const message = form.dataset.message || 'هل أنت متأكد؟';
+            
+            const isConfirmed = await window.Swal.fire({
+                title: 'تأكيد الحذف',
+                text: message,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'نعم، احذف',
+                cancelButtonText: 'إلغاء'
+            });
+
+            if (isConfirmed.isConfirmed) {
+                form.submit();
+            }
+        });
+    });
+
+    // Handle js-confirm-submit forms with SweetAlert (for post/reset)
+    document.querySelectorAll('.js-confirm-submit').forEach(form => {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const title = form.dataset.confirmTitle || 'تأكيد';
+            const text = form.dataset.confirmText || 'هل أنت متأكد؟';
+            const icon = form.dataset.confirmIcon || 'warning';
+            const confirmBtn = form.dataset.confirmButton || 'نعم';
+            const cancelBtn = form.dataset.cancelButton || 'إلغاء';
+            
+            const isConfirmed = await window.Swal.fire({
+                title: title,
+                text: text,
+                icon: icon,
+                showCancelButton: true,
+                confirmButtonText: confirmBtn,
+                cancelButtonText: cancelBtn
+            });
+
+            if (isConfirmed.isConfirmed) {
+                form.submit();
+            }
+        });
+    });
 });
 </script>
 

@@ -6,8 +6,15 @@ if (!has_permission('settings_edit')) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات المباشرة عبر الرابط. استخدم أزرار الصفحة المحمية فقط.";
+}
+
 // معالجة الإضافة
 if (isset($_POST['add_city'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='cities.php';</script>");
+    }
     try {
         // التحقق من التكرار في نفس الدولة
         $check = $pdo->prepare("SELECT id FROM cities WHERE city_name = ? AND country_id = ?");
@@ -26,6 +33,9 @@ if (isset($_POST['add_city'])) {
 
 // معالجة التعديل
 if (isset($_POST['edit_city'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='cities.php';</script>");
+    }
     try {
         $stmt = $pdo->prepare("UPDATE cities SET city_name = ?, country_id = ? WHERE id = ?");
         $stmt->execute([$_POST['city_name'], $_POST['country_id'], $_POST['id']]);
@@ -36,10 +46,13 @@ if (isset($_POST['edit_city'])) {
 }
 
 // معالجة الحذف
-if (isset($_GET['delete'])) {
+if (isset($_POST['delete_city'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='cities.php';</script>");
+    }
     try {
         $stmt = $pdo->prepare("DELETE FROM cities WHERE id = ?");
-        $stmt->execute([$_GET['delete']]);
+        $stmt->execute([(int)$_POST['delete_city']]);
         echo "<script>location.href='cities.php?success=3';</script>";
     } catch (PDOException $e) {
         $error = "خطأ في الحذف: " . $e->getMessage();
@@ -88,9 +101,13 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
                                         data-country="<?php echo $c['country_id']; ?>">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <a href="?delete=<?php echo $c['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('هل أنت متأكد؟')">
-                                    <i class="fas fa-trash"></i>
-                                </a>
+                                <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="delete_city" value="<?php echo $c['id']; ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -106,6 +123,7 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header">
                     <h5 class="modal-title">إضافة مدينة جديدة</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -139,6 +157,7 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header">
                     <h5 class="modal-title">تعديل بيانات المدينة</h5>

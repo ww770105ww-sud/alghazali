@@ -1,6 +1,7 @@
 <?php
 ob_start();
 require_once 'header.php';
+require_once '../core/bookings/BookingServiceFactory.php';
 
 if (!isset($_GET['id'])) {
     header('Location: bus_flight_bookings.php');
@@ -8,6 +9,18 @@ if (!isset($_GET['id'])) {
 }
 
 $id = (int)$_GET['id'];
+$bookingFinancialSourceTypes = [
+    'حجوزات الباصات والطيران',
+    'تذاكر طيران وبصات',
+    'حجوزات الباصات',
+    'حجوزات الطيران',
+    'bus',
+    'flight',
+    'الطيران'
+];
+$bookingFinancialSourceTypesSql = "'" . implode("','", array_map(static function ($value) use ($pdo) {
+    return substr($pdo->quote($value), 1, -1);
+}, $bookingFinancialSourceTypes)) . "'";
 
 // جلب تفاصيل الحجز مع الربط بالجداول الأخرى
 $stmt = $pdo->prepare("
@@ -26,7 +39,7 @@ $stmt = $pdo->prepare("
                     SELECT id FROM unified_accounts
                     WHERE account_code LIKE '101%' OR account_code LIKE '102%' OR account_code LIKE '111%' OR account_type IN ('box', 'bank')
                 )
-            ), inv.amount_received) +
+            ), 0) +
             IFNULL((
                 SELECT SUM(pa.allocated_amount)
                 FROM payment_allocations pa
@@ -49,7 +62,7 @@ $stmt = $pdo->prepare("
                     SELECT id FROM unified_accounts
                     WHERE account_code LIKE '101%' OR account_code LIKE '102%' OR account_code LIKE '111%' OR account_type IN ('box', 'bank')
                 )
-            ), inv_p.amount_received) +
+            ), 0) +
             IFNULL((
                 SELECT SUM(pa.allocated_amount)
                 FROM payment_allocations pa
@@ -103,11 +116,11 @@ $stmt = $pdo->prepare("
     LEFT JOIN invoices inv ON (
         inv.id = b.sales_invoice_id 
         OR inv.id = b.invoice_id 
-        OR (inv.source_type = 'تذاكر طيران وبصات' AND inv.source_id = b.id AND inv.invoice_category = 'sales')
+        OR (inv.source_type IN ($bookingFinancialSourceTypesSql) AND inv.source_id = b.id AND inv.invoice_category = 'sales')
     )
     LEFT JOIN invoices inv_p ON (
         inv_p.id = b.purchase_invoice_id 
-        OR (inv_p.source_type = 'تذاكر طيران وبصات' AND inv_p.source_id = b.id AND inv_p.invoice_category = 'purchase')
+        OR (inv_p.source_type IN ($bookingFinancialSourceTypesSql) AND inv_p.source_id = b.id AND inv_p.invoice_category = 'purchase')
     )
     LEFT JOIN currencies curr ON COALESCE(inv.currency_id, 1) = curr.id
     LEFT JOIN statuses bs ON b.status_id = bs.id
@@ -123,6 +136,13 @@ $b = $stmt->fetch();
 if (!$b) {
     header('Location: bus_flight_bookings.php');
     exit();
+}
+
+$currentBookingSourceType = 'حجوزات الباصات والطيران';
+if (($b['service_type'] ?? '') === 'bus') {
+    $currentBookingSourceType = 'حجوزات الباصات';
+} elseif (($b['service_type'] ?? '') === 'flight') {
+    $currentBookingSourceType = 'حجوزات الطيران';
 }
 
 // جلب سجل الحالات
@@ -156,7 +176,7 @@ $stmt_sales_inv = $pdo->prepare("
     LEFT JOIN unified_accounts ua ON i.account_id = ua.id
     LEFT JOIN customers cust ON i.customer_id = cust.id
     LEFT JOIN unified_accounts coa ON cust.account_id = coa.id
-    WHERE i.source_type IN ('تذاكر طيران وبصات', 'bus_flight_bookings') AND i.source_id = ? AND i.invoice_category = 'sales'
+    WHERE i.source_type IN ($bookingFinancialSourceTypesSql) AND i.source_id = ? AND i.invoice_category = 'sales'
     ORDER BY i.id DESC
     LIMIT 1
 ");
@@ -169,7 +189,7 @@ $stmt_purch_inv = $pdo->prepare("
     LEFT JOIN suppliers s ON i.supplier_id = s.id
     LEFT JOIN unified_accounts ua ON i.account_id = ua.id
     LEFT JOIN unified_accounts coa ON s.account_id = coa.id
-    WHERE i.source_type IN ('تذاكر طيران وبصات', 'bus_flight_bookings') AND i.source_id = ? AND i.invoice_category = 'purchase'
+    WHERE i.source_type IN ($bookingFinancialSourceTypesSql) AND i.source_id = ? AND i.invoice_category = 'purchase'
     ORDER BY i.id DESC
     LIMIT 1
 ");
@@ -299,21 +319,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_missing_invoic
                 $pdo,
                 'sales',
                 $branch_id,
-                'تذاكر طيران وبصات',
+                $currentBookingSourceType,
                 $id,
                 $customer_id,
                 $currency_id,
                 $sale_price,
                 0,
                 $purchase_price,
-                $b['payment_type'] ?? 'cash',
+                'draft',
                 "فاتورة مبيعات لحجز رقم " . $b['booking_number'],
+                normalize_datetime_db(null),
                 $user_id,
                 $b['agent_id'],
                 $b['account_id']
             );
             // تحديث الحجز لربطه بالفاتورة
-            $pdo->prepare("UPDATE bus_flight_bookings SET invoice_id = ? WHERE id = ?")->execute([$sales_invoice_id, $id]);
+            $pdo->prepare("UPDATE bus_flight_bookings SET invoice_id = ?, sales_invoice_id = ? WHERE id = ?")->execute([$sales_invoice_id, $sales_invoice_id, $id]);
         }
 
         // 2. إنشاء فاتورة الشراء (إذا لم تكن موجودة)
@@ -323,23 +344,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_missing_invoic
             $supplier_account_id = $stmt_sup_acc->fetchColumn();
 
             if ($supplier_account_id) {
-                php_create_invoice_and_post(
+                $purchase_invoice_id = php_create_invoice_and_post(
                     $pdo,
                     'purchase',
                     $branch_id,
-                    'تذاكر طيران وبصات',
+                    $currentBookingSourceType,
                     $id,
                     $supplier_id,
                     $currency_id,
                     $purchase_price,
                     0,
                     0,
-                    'credit',
+                    'draft',
                     "فاتورة تكلفة لحجز رقم " . $b['booking_number'],
+                    normalize_datetime_db(null),
                     $user_id,
                     null,
                     $supplier_account_id
                 );
+                $pdo->prepare("UPDATE bus_flight_bookings SET purchase_invoice_id = ? WHERE id = ?")->execute([$purchase_invoice_id, $id]);
             }
         }
 
@@ -757,11 +780,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_missing_invoic
                                                     <i class="fas fa-eye me-1"></i> عرض الفاتورة الكاملة
                                                 </a>
                                                 <?php if ($sales_invoice['invoice_status'] == 'draft'): ?>
-                                                    <a href="invoices.php?post_invoice=<?= $sales_invoice['id'] ?>&return_to=bus_flight_bookings_details.php?id=<?= $id ?>"
-                                                        class="btn btn-sm btn-primary rounded-pill"
-                                                        onclick="return confirm('هل أنت متأكد من ترحيل فاتورة البيع؟')">
-                                                        <i class="fas fa-check-double me-1"></i> ترحيل الفاتورة
-                                                    </a>
+                                                    <form method="post" action="invoices.php" class="d-inline" onsubmit="return confirm('هل أنت متأكد من ترحيل فاتورة البيع؟')">
+                                                        <?php echo csrf_input(); ?>
+                                                        <input type="hidden" name="invoice_action" value="post_invoice">
+                                                        <input type="hidden" name="invoice_id" value="<?= $sales_invoice['id'] ?>">
+                                                        <input type="hidden" name="return_to" value="bus_flight_bookings_details.php?id=<?= $id ?>">
+                                                        <button type="submit" class="btn btn-sm btn-primary rounded-pill">
+                                                            <i class="fas fa-check-double me-1"></i> ترحيل الفاتورة
+                                                        </button>
+                                                    </form>
                                                 <?php endif; ?>
                                             </div>
                                         </div>
@@ -875,11 +902,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_missing_invoic
                                                     <i class="fas fa-eye me-1"></i> عرض الفاتورة الكاملة
                                                 </a>
                                                 <?php if ($purch_invoice['invoice_status'] == 'draft'): ?>
-                                                    <a href="invoices.php?post_invoice=<?= $purch_invoice['id'] ?>&return_to=bus_flight_bookings_details.php?id=<?= $id ?>"
-                                                        class="btn btn-sm btn-warning rounded-pill"
-                                                        onclick="return confirm('هل أنت متأكد من ترحيل فاتورة الشراء؟')">
-                                                        <i class="fas fa-check-double me-1"></i> ترحيل الفاتورة
-                                                    </a>
+                                                    <form method="post" action="invoices.php" class="d-inline" onsubmit="return confirm('هل أنت متأكد من ترحيل فاتورة الشراء؟')">
+                                                        <?php echo csrf_input(); ?>
+                                                        <input type="hidden" name="invoice_action" value="post_invoice">
+                                                        <input type="hidden" name="invoice_id" value="<?= $purch_invoice['id'] ?>">
+                                                        <input type="hidden" name="return_to" value="bus_flight_bookings_details.php?id=<?= $id ?>">
+                                                        <button type="submit" class="btn btn-sm btn-warning rounded-pill">
+                                                            <i class="fas fa-check-double me-1"></i> ترحيل الفاتورة
+                                                        </button>
+                                                    </form>
                                                 <?php endif; ?>
                                             </div>
                                         </div>

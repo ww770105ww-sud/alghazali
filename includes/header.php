@@ -1,6 +1,9 @@
 <?php
 ob_start();
 define('SYSTEM_ACCESS', true);
+if (!headers_sent()) {
+    header('Content-Type: text/html; charset=utf-8');
+}
 require_once 'db.php';
 require_once 'functions.php';
 $settings = getSettings($pdo);
@@ -78,7 +81,7 @@ $canonical_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "http
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/icon-fallback.css?v=20260430">
+    <link rel="stylesheet" href="assets/css/icon-fallback.css?v=20260617">
     <link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
     <link rel="stylesheet" href="assets/css/custom_style.css">
     <link rel="stylesheet" href="assets/css/unified-design.css?v=20260430">

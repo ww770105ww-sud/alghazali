@@ -1,0 +1,12 @@
+<IfModule mod_authz_core.c>
+    <FilesMatch "^(fix.*|debug.*|check.*)\.php$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^(fix.*|debug.*|check.*)\.php$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>

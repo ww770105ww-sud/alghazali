@@ -13,6 +13,10 @@ if (!has_permission('manage_financial_accounts')) {
     exit();
 }
 
+if (isset($_GET['deactivate']) || isset($_GET['delete_permanent'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة مورد جديد
 if (isset($_POST['add_supplier_account'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -20,9 +24,13 @@ if (isset($_POST['add_supplier_account'])) {
     }
     $account_name = $_POST['account_name'];
     $branch_id = $_POST['branch_id'] ?: null;
+    $supplier_phone = $_POST['supplier_phone'] ?? null;
+    $address = $_POST['address'] ?? null;
+    $link = $_POST['link'] ?? null;
     $opening_balance = $_POST['opening_balance'] ?? 0;
     $currency_id = $_POST['currency_id'] ?? 1;
     $status = $_POST['status'] == 'active' ? 'active' : $_POST['status'];
+    $supplier_email = $_POST['supplier_email'] ?? null;
 
     try {
         $pdo->beginTransaction();
@@ -69,12 +77,12 @@ if (isset($_POST['add_supplier_account'])) {
             $opening_balance_base = $opening_balance_for_base * $rate;
             
             $stmt_base_balance = $pdo->prepare("INSERT INTO account_balances_unified (account_id, branch_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
-            $stmt_base_balance->execute([$new_account_id, $branch_id, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
+            $stmt_base_balance->execute([$new_account_id, null, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
         }
 
         // Also insert into suppliers table!
-        $insertSupplierStmt = $pdo->prepare("INSERT INTO suppliers (supplier_name, account_id, created_at, status) VALUES (?, ?, NOW(), ?)");
-        $insertSupplierStmt->execute([$account_name, $new_account_id, $status]);
+        $insertSupplierStmt = $pdo->prepare("INSERT INTO suppliers (supplier_name, account_id, supplier_phone, address, link, created_at, status) VALUES (?, ?, ?, ?, ?, NOW(), ?)");
+        $insertSupplierStmt->execute([$account_name, $new_account_id, $supplier_phone, $address, $link, $status]);
         
         $pdo->commit();
         echo "<script>location.href='suppliers.php?success=1';</script>";
@@ -94,6 +102,9 @@ if (isset($_POST['update_supplier_account'])) {
     $account_name = $_POST['account_name'];
     $new_status = $_POST['status'];
     $branch_id = $_POST['branch_id'] ?: null;
+    $supplier_phone = $_POST['supplier_phone'] ?? null;
+    $supplier_email = $_POST['supplier_email'] ?? null;
+    $address = $_POST['address'] ?? null;
     
     try {
         $pdo->beginTransaction();
@@ -115,6 +126,10 @@ if (isset($_POST['update_supplier_account'])) {
         
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_name_ar = ?, account_status = ?, branch_id = ? WHERE id = ?");
         $stmt->execute([$account_name, $new_status, $branch_id, $id]);
+
+        // Update suppliers table as well
+        $updateSupplierStmt = $pdo->prepare("UPDATE suppliers SET supplier_name = ?, supplier_phone = ?, supplier_email = ?, address = ?, status = ?, updated_at = NOW() WHERE account_id = ?");
+        $updateSupplierStmt->execute([$account_name, $supplier_phone, $supplier_email, $address, $new_status, $id]);
         
         $pdo->commit();
         echo "<script>location.href='suppliers.php?success=2';</script>";
@@ -125,9 +140,12 @@ if (isset($_POST['update_supplier_account'])) {
     }
 }
 
-// تحويل إلى خامل
-if (isset($_GET['deactivate'])) {
-    $id = (int)$_GET['deactivate'];
+// تحويل إلى خامل عبر POST + CSRF
+if (isset($_POST['deactivate_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='suppliers.php';</script>");
+    }
+    $id = (int)$_POST['deactivate_account'];
     try {
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
         $stmt->execute([$id]);
@@ -138,9 +156,12 @@ if (isset($_GET['deactivate'])) {
     }
 }
 
-// حذف نهائي
-if (isset($_GET['delete_permanent'])) {
-    $id = (int)$_GET['delete_permanent'];
+// حذف نهائي عبر POST + CSRF
+if (isset($_POST['delete_account_permanent'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='suppliers.php';</script>");
+    }
+    $id = (int)$_POST['delete_account_permanent'];
     try {
         $pdo->beginTransaction();
         
@@ -189,45 +210,68 @@ if (!empty($_GET['q'])) {
 }
 
 $suppliers_stmt = $pdo->prepare("
-    SELECT coa.*, p.account_name_ar as parent_name, b.branch_name
+    SELECT coa.*, p.account_name_ar as parent_name, b.branch_name,
+           s.id as supplier_id, s.supplier_phone, s.supplier_email, s.address, s.link
     FROM unified_accounts coa
     LEFT JOIN unified_accounts p ON coa.parent_id = p.id
     LEFT JOIN branches b ON coa.branch_id = b.id
+    LEFT JOIN suppliers s ON coa.id = s.account_id
     $where
     ORDER BY coa.account_code ASC
 ");
 $suppliers_stmt->execute($params);
 $suppliers = $suppliers_stmt->fetchAll();
 
-// جلب الأرصدة الحقيقية لكل الموردين (مثل financial_accounts.php)
+// جلب الأرصدة الحقيقية من account_balances_unified
 $supplier_account_ids = array_column($suppliers, 'id');
 $balances = [];
-$real_balances = [];
-$total_balance = 0;
-$currency_name = '';
+$total_debit = 0;
+$total_credit = 0;
+$supplier_totals = []; // to store per supplier totals in base currency
 if (!empty($supplier_account_ids)) {
     $placeholders = implode(',', array_fill(0, count($supplier_account_ids), '?'));
-    // Get the real balance from journal_lines
     $bal_stmt = $pdo->prepare("
         SELECT 
-            jl.account_id, 
-            jl.currency_id,
+            abu.account_id, 
+            abu.currency_id,
             c.currency_name,
             c.currency_symbol,
-            SUM(jl.debit - jl.credit) as net_balance,
-            SUM((jl.debit - jl.credit) * COALESCE(c.exchange_rate, 1)) as net_balance_base
-        FROM journal_lines jl
-        JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
-        LEFT JOIN currencies c ON jl.currency_id = c.id
-        WHERE ft.status = 'posted' AND jl.account_id IN ($placeholders)
-        GROUP BY jl.account_id, jl.currency_id
+            abu.current_balance,
+            abu.current_balance_base,
+            ua.normal_balance
+        FROM account_balances_unified abu
+        JOIN unified_accounts ua ON abu.account_id = ua.id
+        LEFT JOIN currencies c ON abu.currency_id = c.id
+        WHERE abu.account_id IN ($placeholders)
     ");
     $bal_stmt->execute($supplier_account_ids);
     $result = $bal_stmt->fetchAll();
     foreach ($result as $row) {
         $balances[$row['account_id']][] = $row;
-        $total_balance += $row['net_balance_base'];
-        if (!$currency_name) $currency_name = $row['currency_name'];
+        
+        // Calculate per supplier and overall totals in base currency
+        if (!isset($supplier_totals[$row['account_id']])) {
+            $supplier_totals[$row['account_id']] = ['debit' => 0, 'credit' => 0];
+        }
+        
+        $current_balance_base = (float)$row['current_balance_base'];
+        if ($row['normal_balance'] === 'debit') {
+            if ($current_balance_base > 0) {
+                $supplier_totals[$row['account_id']]['debit'] += $current_balance_base;
+                $total_debit += $current_balance_base;
+            } else {
+                $supplier_totals[$row['account_id']]['credit'] += abs($current_balance_base);
+                $total_credit += abs($current_balance_base);
+            }
+        } else { // credit normal balance
+            if ($current_balance_base > 0) {
+                $supplier_totals[$row['account_id']]['credit'] += $current_balance_base;
+                $total_credit += $current_balance_base;
+            } else {
+                $supplier_totals[$row['account_id']]['debit'] += abs($current_balance_base);
+                $total_debit += abs($current_balance_base);
+            }
+        }
     }
 }
 
@@ -237,14 +281,97 @@ $branches = $pdo->query("SELECT id, branch_name FROM branches")->fetchAll();
 $page_title = "إدارة الموردين";
 ?>
 
+<style>
+    /* Ensure modal footer is visible in dark theme */
+    #addSupplierModal .modal-footer,
+    #editSupplierModal .modal-footer {
+        background-color: #f8f9fa !important;
+        border-top: 1px solid #dee2e6 !important;
+        display: flex !important;
+        justify-content: flex-end !important;
+        gap: 1rem !important;
+        padding: 1.5rem !important;
+        position: sticky !important;
+        bottom: 0 !important;
+        z-index: 1051 !important;
+    }
+
+    /* Ensure modal header is visible */
+    #addSupplierModal .modal-header,
+    #editSupplierModal .modal-header {
+        background-color: #0d6efd !important;
+        color: white !important;
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 1051 !important;
+    }
+    
+    #editSupplierModal .modal-header {
+        background-color: #ffc107 !important;
+        color: #212529 !important;
+    }
+
+    #addSupplierModal .modal-footer button,
+    #editSupplierModal .modal-footer button {
+        z-index: 1060 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        position: relative !important;
+    }
+
+    /* Make save button more prominent */
+    #addSupplierModal .btn-primary,
+    #editSupplierModal .btn-warning {
+        font-size: 1rem !important;
+        padding: 0.75rem 2rem !important;
+        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3) !important;
+    }
+
+    /* Make modal body scrollable */
+    #addSupplierModal .modal-body,
+    #editSupplierModal .modal-body {
+        overflow-y: auto !important;
+        max-height: calc(90vh - 140px) !important;
+    }
+
+    /* Make modal content height better */
+    #addSupplierModal .modal-content,
+    #editSupplierModal .modal-content {
+        max-height: 90vh !important;
+    }
+
+    /* Ensure modal dialog is centered and visible */
+    #addSupplierModal .modal-dialog,
+    #editSupplierModal .modal-dialog {
+        margin: 1.75rem auto !important;
+    }
+
+    /* Force modal to show correctly in dark mode */
+    body.theme-dark #addSupplierModal .modal-content,
+    body.theme-dark #editSupplierModal .modal-content {
+        background-color: #111827 !important;
+    }
+
+    body.theme-dark #addSupplierModal .modal-footer,
+    body.theme-dark #editSupplierModal .modal-footer {
+        background-color: #0f1e35 !important;
+        border-top: 1px solid #1e2d45 !important;
+    }
+</style>
+
 <div class="container-fluid py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h3 class="fw-bold mb-1"><i class="fas fa-truck-loading me-2 text-primary"></i> إدارة الموردين</h3>
             <div class="d-flex align-items-center">
                 <p class="text-muted small mb-0 me-3">إدارة وتعديل حسابات الموردين في شجرة الحسابات</p>
-                <div class="ms-2 px-3 py-1 bg-white border rounded-pill shadow-sm small">
-                    <?php echo get_total_balance_status($total_balance, 'liability', $currency_name); ?>
+                <div class="ms-2 px-3 py-1 bg-success bg-opacity-10 border border-success border-opacity-20 rounded-pill shadow-sm small me-2">
+                    <i class="fas fa-arrow-down me-1 text-success"></i>
+                    إجمالي لنا: <span class="fw-bold text-success"><?php echo number_format($total_debit, 2); ?></span> <?php echo htmlspecialchars($baseCurrency['currency_name'] ?? ''); ?>
+                </div>
+                <div class="ms-2 px-3 py-1 bg-danger bg-opacity-10 border border-danger border-opacity-20 rounded-pill shadow-sm small">
+                    <i class="fas fa-arrow-up me-1 text-danger"></i>
+                    إجمالي علينا: <span class="fw-bold text-danger"><?php echo number_format($total_credit, 2); ?></span> <?php echo htmlspecialchars($baseCurrency['currency_name'] ?? ''); ?>
                 </div>
             </div>
         </div>
@@ -318,29 +445,28 @@ $page_title = "إدارة الموردين";
                                 </span>
                             </td>
                             <td>
-                <?php 
-                if (isset($balances[$supplier['id']])) {
-                    // Group balances by currency to avoid duplicates and sum
-                    $balancesByCurrency = [];
-                    foreach ($balances[$supplier['id']] as $bal) {
-                        if (!isset($balancesByCurrency[$bal['currency_id']])) {
-                            $balancesByCurrency[$bal['currency_id']] = [
-                                'net_balance' => 0,
-                                'currency_name' => $bal['currency_name'],
-                                'currency_symbol' => $bal['currency_symbol'] ?? $bal['currency_name']
-                            ];
-                        }
-                        $balancesByCurrency[$bal['currency_id']]['net_balance'] += (float)$bal['net_balance'];
-                    }
-
-                    foreach ($balancesByCurrency as $balData) {
-                        echo '<div class="mb-1 small">' . format_account_balance($balData['net_balance'], $supplier['normal_balance'], $balData['currency_name']) . '</div>';
-                    }
-                } else {
-                    echo '<span class="text-muted small">0.00</span>';
-                }
-                ?>
-            </td>
+                                <?php 
+                                if (isset($balances[$supplier['id']]) && !empty($balances[$supplier['id']])) {
+                                    foreach ($balances[$supplier['id']] as $bal) {
+                                        echo '<div class="mb-1 small">' . format_account_balance($bal['current_balance'], $bal['normal_balance'], $bal['currency_name']) . '</div>';
+                                    }
+                                } else {
+                                    echo '<div class="mb-1 small text-muted">0.00 ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                }
+                                
+                                $cust_debit = $supplier_totals[$supplier['id']]['debit'] ?? 0;
+                                $cust_credit = $supplier_totals[$supplier['id']]['credit'] ?? 0;
+                                if ($cust_debit > 0 || $cust_credit > 0) {
+                                    echo '<hr class="my-2">';
+                                    if ($cust_debit > 0) {
+                                        echo '<div class="small text-success"><i class="fas fa-arrow-down me-1"></i> لنا: ' . number_format($cust_debit, 2) . ' ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                    }
+                                    if ($cust_credit > 0) {
+                                        echo '<div class="small text-danger"><i class="fas fa-arrow-up me-1"></i> علينا: ' . number_format($cust_credit, 2) . ' ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                    }
+                                }
+                                ?>
+                            </td>
                             <td>
                                 <?php echo get_account_status_label($supplier['account_status']); ?>
                             </td>
@@ -354,15 +480,20 @@ $page_title = "إدارة الموردين";
                                             data-name="<?php echo htmlspecialchars($supplier['account_name_ar']); ?>"
                                             data-branch="<?php echo $supplier['branch_id']; ?>"
                                             data-status="<?php echo $supplier['account_status']; ?>"
+                                            data-phone="<?php echo htmlspecialchars($supplier['supplier_phone'] ?? ''); ?>"
+                                            data-email="<?php echo htmlspecialchars($supplier['supplier_email'] ?? ''); ?>"
+                                            data-address="<?php echo htmlspecialchars($supplier['address'] ?? ''); ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="suppliers.php?deactivate=<?php echo $supplier['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من تحويل هذا المورد إلى خامل؟')"
-                                       title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></a>
-                                    <a href="suppliers.php?delete_permanent=<?php echo $supplier['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا المورد نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')"
-                                       title="حذف نهائي"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من تحويل هذا المورد إلى خامل؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="deactivate_account" value="<?php echo $supplier['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></button>
+                                    </form>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا المورد نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_account_permanent" value="<?php echo $supplier['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف نهائي"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -376,21 +507,34 @@ $page_title = "إدارة الموردين";
 
 <!-- Modal إضافة مورد -->
 <div class="modal fade" id="addSupplierModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg rounded-4 d-flex flex-column">
+            <form method="POST" class="d-flex flex-column h-100">
                 <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة مورد جديد</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    <div class="d-flex gap-2">
+                        <button type="submit" name="add_supplier_account" class="btn btn-light text-primary fw-bold">
+                            <i class="fas fa-save me-1"></i> حفظ
+                        </button>
+                        <button type="button" class="btn-close btn-close-white ms-2" data-bs-dismiss="modal"></button>
+                    </div>
                 </div>
-                <div class="modal-body p-4">
+                <div class="modal-body p-4 flex-grow-1 overflow-auto">
                     <div class="row">
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">اسم المورد <span class="text-danger">*</span></label>
                             <input type="text" name="account_name" class="form-control rounded-3" placeholder="مثلاً: شركة التوريد" required>
                         </div>
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الهاتف</label>
+                            <input type="text" name="supplier_phone" class="form-control rounded-3" placeholder="مثلاً: +967771234567">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">البريد الإلكتروني</label>
+                            <input type="email" name="supplier_email" class="form-control rounded-3" placeholder="مثلاً: info@example.com">
+                        </div>
+                        <div class="col-md-4 mb-3">
                             <label class="form-label fw-bold small">الفرع المربوط به <span class="text-danger">*</span></label>
                             <select name="branch_id" class="form-select rounded-3" required>
                                 <option value="">-- اختر الفرع --</option>
@@ -399,7 +543,7 @@ $page_title = "إدارة الموردين";
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label class="form-label fw-bold small">العملة</label>
                             <select name="currency_id" class="form-select rounded-3">
                                 <?php foreach ($currencies as $c): ?>
@@ -409,9 +553,13 @@ $page_title = "إدارة الموردين";
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label class="form-label fw-bold small">الرصيد الافتتاحي</label>
                             <input type="number" step="0.01" name="opening_balance" class="form-control rounded-3" value="0.00">
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">العنوان</label>
+                            <textarea name="address" class="form-control rounded-3" rows="2" placeholder="العنوان التفصيلي"></textarea>
                         </div>
                         <div class="col-md-12 mb-3">
                             <label class="form-label fw-bold small">الحالة</label>
@@ -423,7 +571,7 @@ $page_title = "إدارة الموردين";
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4 bg-light shadow-sm">
+                <div class="modal-footer border-0 p-4 bg-light shadow-sm flex-shrink-0">
                     <button type="button" class="btn btn-white rounded-pill px-4 border" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="add_supplier_account" class="btn btn-primary rounded-pill px-5 fw-bold shadow">حفظ المورد</button>
                 </div>
@@ -434,22 +582,35 @@ $page_title = "إدارة الموردين";
 
 <!-- Modal تعديل مورد -->
 <div class="modal fade" id="editSupplierModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg rounded-4 d-flex flex-column">
+            <form method="POST" class="d-flex flex-column h-100">
                 <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header bg-warning text-dark border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل بيانات المورد</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <div class="d-flex gap-2">
+                        <button type="submit" name="update_supplier_account" class="btn btn-light text-dark fw-bold">
+                            <i class="fas fa-save me-1"></i> حفظ
+                        </button>
+                        <button type="button" class="btn-close ms-2" data-bs-dismiss="modal"></button>
+                    </div>
                 </div>
-                <div class="modal-body p-4">
+                <div class="modal-body p-4 flex-grow-1 overflow-auto">
                     <div class="row">
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">اسم المورد <span class="text-danger">*</span></label>
                             <input type="text" name="account_name" id="edit_name" class="form-control rounded-3" required>
                         </div>
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الهاتف</label>
+                            <input type="text" name="supplier_phone" id="edit_phone" class="form-control rounded-3" placeholder="مثلاً: +967771234567">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">البريد الإلكتروني</label>
+                            <input type="email" name="supplier_email" id="edit_email" class="form-control rounded-3" placeholder="مثلاً: info@example.com">
+                        </div>
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">الفرع المربوط به</label>
                             <select name="branch_id" id="edit_branch" class="form-select rounded-3">
                                 <option value="">-- عام (بدون فرع) --</option>
@@ -458,7 +619,7 @@ $page_title = "إدارة الموردين";
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">الحالة</label>
                             <select name="status" id="edit_status" class="form-select rounded-3">
                                 <option value="active">نشط</option>
@@ -467,9 +628,13 @@ $page_title = "إدارة الموردين";
                                 <option value="dormant">راكد (غير مستخدم)</option>
                             </select>
                         </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">العنوان</label>
+                            <textarea name="address" id="edit_address" class="form-control rounded-3" rows="2" placeholder="العنوان التفصيلي"></textarea>
+                        </div>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4 bg-light shadow-sm">
+                <div class="modal-footer border-0 p-4 bg-light shadow-sm flex-shrink-0">
                     <button type="button" class="btn btn-white rounded-pill px-4 border" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="update_supplier_account" class="btn btn-warning rounded-pill px-5 fw-bold shadow">حفظ التغييرات</button>
                 </div>
@@ -485,11 +650,17 @@ $(document).ready(function() {
         var name = $(this).data('name');
         var branch = $(this).data('branch');
         var status = $(this).data('status');
+        var phone = $(this).data('phone');
+        var email = $(this).data('email');
+        var address = $(this).data('address');
         
         $('#edit_id').val(id);
         $('#edit_name').val(name);
         $('#edit_branch').val(branch);
         $('#edit_status').val(status);
+        $('#edit_phone').val(phone);
+        $('#edit_email').val(email);
+        $('#edit_address').val(address);
         
         $('#editSupplierModal').modal('show');
     });

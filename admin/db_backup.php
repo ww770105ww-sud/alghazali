@@ -3,10 +3,7 @@ $page_title = 'إنشاء نسخة احتياطية';
 $error_message = null;
 $success_message = null;
 
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-
+require_once dirname(__DIR__) . '/includes/session_config.php';
 require_once dirname(__DIR__) . '/includes/db.php';
 require_once dirname(__DIR__) . '/includes/backup_functions.php';
 

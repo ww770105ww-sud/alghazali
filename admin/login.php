@@ -1,17 +1,5 @@
 <?php
-// Secure session configuration
-if (session_status() === PHP_SESSION_NONE) {
-    // Set secure cookie parameters
-    session_set_cookie_params([
-        'lifetime' => 0,
-        'path' => '/',
-        'domain' => '',
-        'secure' => (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on'),
-        'httponly' => true,
-        'samesite' => 'Strict'
-    ]);
-    session_start();
-}
+require_once __DIR__ . '/../includes/session_config.php';
 require_once '../includes/db.php';
 require_once '../includes/functions.php';
 
@@ -38,18 +26,98 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($user['status'] == 'inactive') {
             $error = 'حسابك غير نشط. يرجى التواصل مع المسؤول.';
         } else {
-            $_SESSION['admin_id'] = $user['id'];
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['username'] = $user['username'];
-            $_SESSION['full_name'] = $user['full_name'] ?? $user['username'];
-            $_SESSION['role'] = $user['role_name'] ?? $user['role'] ?? 'employee';
-            $_SESSION['role_id'] = $user['role_id'];
-            $_SESSION['branch_id'] = $user['branch_id'] ?? null;
-            $_SESSION['agent_id'] = $user['agent_id'] ?? null;
-            header('Location: index.php');
-            exit();
+            // Check if blocked_devices table exists first
+            try {
+                $checkTable = $pdo->query("SHOW TABLES LIKE 'blocked_devices'");
+                $hasBlockedTable = $checkTable->fetch() !== false;
+                
+                $deviceBlocked = false;
+                if ($hasBlockedTable) {
+                    $device_fingerprint = generateDeviceFingerprint();
+                    $deviceBlocked = isDeviceBlocked($user['id'], $device_fingerprint);
+                }
+                
+                if ($deviceBlocked) {
+                    $error = 'هذا الجهاز محظور من الدخول. يرجى التواصل مع المسؤول.';
+                    logUserActivity(
+                        $user['id'],
+                        $user['username'],
+                        $user['full_name'] ?? $user['username'],
+                        'login_blocked',
+                        'محاولة تسجيل دخول من جهاز محظور'
+                    );
+                } else {
+                    // Create user session (handles multiple sessions setting)
+                    $session_result = createUserSession($user['id']);
+
+                    if (isset($session_result['success']) && $session_result['success'] === false) {
+                        $error = $session_result['message'] ?? 'تعذر تسجيل الدخول.';
+                        logUserActivity(
+                            $user['id'],
+                            $user['username'],
+                            $user['full_name'] ?? $user['username'],
+                            'login_failed',
+                            $error
+                        );
+                    } else {
+                        // Security: regenerate session ID to prevent session fixation attacks
+                        if (session_status() === PHP_SESSION_ACTIVE) {
+                            session_regenerate_id(true);
+                        }
+
+                        $ua_parsed = function_exists('parseUserAgent') ? parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '') : null;
+                        logUserActivity(
+                            $user['id'],
+                            $user['username'],
+                            $user['full_name'] ?? $user['username'],
+                            'login',
+                            'تسجيل دخول ناجح | نوع الجهاز: ' . ($ua_parsed['device'] ?? 'desktop')
+                        );
+
+                        $_SESSION['admin_id'] = $user['id'];
+                        $_SESSION['user_id']  = $user['id'];
+                        $_SESSION['username'] = $user['username'];
+                        $_SESSION['full_name'] = $user['full_name'] ?? $user['username'];
+                        $_SESSION['role']    = $user['role_name'] ?? $user['role'] ?? 'employee';
+                        $_SESSION['role_id'] = $user['role_id'];
+                        $_SESSION['branch_id'] = $user['branch_id'] ?? null;
+                        $_SESSION['agent_id']  = $user['agent_id'] ?? null;
+                        $_SESSION['login_ip']  = $_SERVER['REMOTE_ADDR'] ?? null;
+                        $_SESSION['login_at']  = time();
+
+                        // Update DB row with the newly regenerated session_id
+                        try {
+                            $update_sess = $pdo->prepare("
+                                UPDATE user_sessions
+                                   SET session_id = ?
+                                 WHERE user_id = ? AND status = 'active'
+                                 ORDER BY started_at DESC LIMIT 1
+                            ");
+                            $update_sess->execute([session_id(), $user['id']]);
+                        } catch (Throwable $t) {
+                            error_log("Login session_id sync warning: " . $t->getMessage());
+                        }
+
+                        header('Location: index.php');
+                        exit();
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Login error: " . $e->getMessage());
+                $error = 'حدث خطأ داخلي أثناء تسجيل الدخول. يرجى المحاولة مرة أخرى.';
+            }
         }
     } else {
+        // Log failed login attempt
+        if (!empty($username)) {
+            logUserActivity(
+                null,
+                $username,
+                null,
+                'login_failed',
+                'محاولة تسجيل دخول فاشلة'
+            );
+        }
         $error = 'اسم المستخدم أو كلمة المرور غير صحيحة';
     }
     }
@@ -61,10 +129,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تسجيل الدخول | <?php echo $settings['site_name']; ?></title>
+    <title>تسجيل الدخول | <?php echo $settings['site_name'] ?? 'نظام الغزالي'; ?></title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/css/icon-fallback.css?v=20260430">
+    <link rel="stylesheet" href="../assets/css/icon-fallback.css?v=20260617">
     <link rel="stylesheet" href="../assets/css/unified-design.css?v=20260430">
     <script>
         (function() {
@@ -243,14 +311,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     <div class="login-container">
         <div class="login-card animate__animated animate__fadeInUp">
             <div class="card-header-custom">
-                <div class="logo-wrapper">
-                    <?php if ($settings['site_logo']): ?>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                <div class="logo-wrapper">
+                    <?php if (!empty($settings['site_logo'])): ?>
                         <img src="../assets/uploads/<?php echo $settings['site_logo']; ?>" alt="Logo">
                     <?php else: ?>
                         <i class="fas fa-plane-departure fa-3x text-primary"></i>
                     <?php endif; ?>
                 </div>
-                <h1 class="login-title"><?php echo $settings['site_name']; ?></h1>
+                <h1 class="login-title"><?php echo $settings['site_name'] ?? 'نظام الغزالي'; ?></h1>
                 <p class="login-subtitle">مرحباً بك، يرجى تسجيل الدخول للمتابعة</p>
             </div>
             <div class="card-body p-4 pt-0">

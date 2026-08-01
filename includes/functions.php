@@ -1,20 +1,6 @@
 <?php
+require_once __DIR__ . '/session_config.php';
 require_once __DIR__ . '/tafqeet.php';
-
-if (session_status() === PHP_SESSION_NONE) {
-    $cookieSecure = (
-        (!empty($_SERVER['HTTPS']) && strtolower($_SERVER['HTTPS']) !== 'off') ||
-        (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443) ||
-        (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https')
-    );
-
-    session_set_cookie_params([
-        'secure' => $cookieSecure,
-        'httponly' => true,
-        'samesite' => 'Lax'
-    ]);
-    session_start();
-}
 
 /**
  * XSS Protection helper
@@ -22,6 +8,145 @@ if (session_status() === PHP_SESSION_NONE) {
 function h($str)
 {
     return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
+}
+
+if (!function_exists('normalize_datetime_db')) {
+    function normalize_datetime_db($value = null, $default = 'now')
+    {
+        if ($value instanceof DateTimeInterface) {
+            return $value->format('Y-m-d H:i:s');
+        }
+
+        if ($value === null || $value === '') {
+            if ($default === null) {
+                return null;
+            }
+
+            if ($default === 'now') {
+                return date('Y-m-d H:i:s');
+            }
+
+            return normalize_datetime_db($default, null);
+        }
+
+        if (is_numeric($value)) {
+            return date('Y-m-d H:i:s', (int)$value);
+        }
+
+        $value = trim((string)$value);
+        if ($value === '') {
+            return normalize_datetime_db(null, $default);
+        }
+
+        $timestamp = strtotime(str_replace('T', ' ', $value));
+        if ($timestamp === false) {
+            return normalize_datetime_db(null, $default);
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
+    }
+}
+
+if (!function_exists('format_datetime_local_value')) {
+    function format_datetime_local_value($value)
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if ($value instanceof DateTimeInterface) {
+            return $value->format('Y-m-d\TH:i');
+        }
+
+        $timestamp = is_numeric($value) ? (int)$value : strtotime(str_replace('T', ' ', (string)$value));
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return date('Y-m-d\TH:i', $timestamp);
+    }
+}
+
+if (!function_exists('format_datetime_display')) {
+    function format_datetime_display($value)
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if ($value instanceof DateTimeInterface) {
+            return $value->format('Y-m-d H:i');
+        }
+
+        $timestamp = is_numeric($value) ? (int)$value : strtotime(str_replace('T', ' ', (string)$value));
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return date('Y-m-d H:i', $timestamp);
+    }
+}
+
+if (!function_exists('normalize_service_display_name')) {
+    function normalize_service_display_name($source_type)
+    {
+        $display_names = [
+            'flight' => 'الطيران',
+            'bus' => 'النقل البري',
+            'passport' => 'جوازات السفر',
+            'umrah' => 'العمرة',
+            'hajj' => 'الحج',
+            'family_visit' => 'الزيارة العائلية',
+            'work_visa' => 'فيز العمل',
+            'postal_services' => 'الخدمات البريدية',
+            'general' => 'عام'
+        ];
+        
+        $source_type = trim((string)$source_type);
+        
+        // Check aliases
+        $all_aliases = array_merge(
+            get_umrah_service_aliases(),
+            get_hajj_service_aliases(),
+            get_postal_service_aliases()
+        );
+        
+        if (in_array($source_type, $all_aliases)) {
+            if (is_umrah_service($source_type)) {
+                return 'العمرة';
+            } elseif (is_hajj_service($source_type)) {
+                return 'الحج';
+            } elseif (is_postal_service($source_type)) {
+                return 'الخدمات البريدية';
+            }
+        }
+        
+        // Check the mapping in getServiceInvoiceConfig
+        $settings = [];
+        $config_mapping = [
+            'النقل البري' => 'النقل البري',
+            'تذاكر طيران وبصات' => 'الطيران',
+            'bus_flight_bookings' => 'الطيران',
+            'تذكر طيران' => 'الطيران',
+            'الطيران' => 'الطيران',
+            'bus' => 'النقل البري',
+            'flight' => 'الطيران',
+            'جوازت السفر' => 'جوازات السفر',
+            'حج وعمرة' => 'العمرة',
+            'خدمات العمرة' => 'العمرة',
+            'خدمات الحج والعمرة' => 'العمرة',
+            'umrah' => 'العمرة',
+            'خدمات الحج' => 'الحج',
+            'hajj' => 'الحج',
+            'الزيارة العائلية' => 'الزيارة العائلية',
+            'family_visit' => 'الزيارة العائلية',
+            'فيز العمل' => 'فيز العمل',
+            'work_visa' => 'فيز العمل',
+            'postal_services' => 'الخدمات البريدية'
+        ];
+        
+        return $config_mapping[$source_type] ?? $display_names[$source_type] ?? $source_type;
+    }
 }
 
 /**
@@ -250,12 +375,26 @@ function getServiceInvoiceConfig($source_type, $settings)
         'الطيران' => 'flight',
         'bus' => 'flight',
         'flight' => 'flight',
+        'حجوزات الطيران' => 'flight',
+        'حجوزات الباصات' => 'flight',
         'جوازت السفر' => 'passport',
+        'معاملات جوازات' => 'passport',
         'حج وعمرة' => 'umrah',
+        'قسم العمرة' => 'umrah',
+        'خدمات العمرة' => 'umrah',
+        'خدمات الحج والعمرة' => 'umrah',
+        'umrah' => 'umrah',
+        'خدمات الحج' => 'hajj',
+        'hajj' => 'hajj',
         'الزيارة العائلية' => 'family_visit',
+        'FamilyVisit' => 'family_visit',
         'family_visit' => 'family_visit',
         'فيز العمل' => 'work_visa',
         'work_visa' => 'work_visa',
+        'postal_services' => 'postal_services',
+        'الخدمات البريدية' => 'postal_services',
+        'خدمات البريد' => 'postal_services',
+        'postal' => 'postal_services',
         'general' => 'general'
     ];
     $key = $mapping[$source_type] ?? 'general';
@@ -317,44 +456,530 @@ function generateInvoiceNumber($pdo, $source_type, $category, $settings, $fixed_
 function has_permission($perm_name)
 {
     global $pdo;
+    static $request_permission_cache = [];
+    static $request_super_user_cache = [];
 
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
 
-    // استخدام الكاش إذا كان متاحاً
-    if (isset($_SESSION['perms'][$perm_name])) {
-        return $_SESSION['perms'][$perm_name];
-    }
-
     $user_id = $_SESSION['user_id'] ?? $_SESSION['admin_id'] ?? null;
     if (!$user_id) return false;
 
-    // Check if user is admin/developer (Super users)
-    $stmt = $pdo->prepare("SELECT r.name, u.user_type FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?");
-    $stmt->execute([$user_id]);
-    $user_info = $stmt->fetch();
+    if (!array_key_exists($user_id, $request_super_user_cache)) {
+        $stmt = $pdo->prepare("SELECT r.name, u.user_type FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?");
+        $stmt->execute([$user_id]);
+        $user_info = $stmt->fetch();
 
-    if ($user_info) {
-        $role = strtolower($user_info['name']);
-        $user_type = strtolower($user_info['user_type']);
-        if (in_array($role, ['admin', 'developer', 'super_admin']) || in_array($user_type, ['admin', 'developer'])) return true;
+        $is_super_user = false;
+        if ($user_info) {
+            $role = mb_strtolower((string)$user_info['name'], 'UTF-8');
+            $user_type = mb_strtolower((string)$user_info['user_type'], 'UTF-8');
+            $super_roles = ['admin', 'developer', 'super_admin', 'مدير', 'مبرمج', 'مطور'];
+            $is_super_user = in_array($role, $super_roles, true) || in_array($user_type, $super_roles, true);
+        }
+
+        $request_super_user_cache[$user_id] = $is_super_user;
     }
 
-    // Check specific permission in role_permissions_unified
-    $stmt = $pdo->prepare("
-        SELECT 1 FROM role_permissions_unified rp
-        JOIN unified_permissions p ON rp.permission_id = p.id
-        JOIN users u ON u.role_id = rp.role_id
-        WHERE u.id = ? AND p.permission_code = ?
+    if ($request_super_user_cache[$user_id]) {
+        return true;
+    }
+
+    if (!array_key_exists($user_id, $request_permission_cache)) {
+        $stmt = $pdo->prepare("
+            SELECT p.permission_code
+            FROM role_permissions_unified rp
+            JOIN unified_permissions p ON rp.permission_id = p.id
+            JOIN users u ON u.role_id = rp.role_id
+            WHERE u.id = ?
+              AND (rp.target_type IS NULL OR rp.target_type = '')
+        ");
+        $stmt->execute([$user_id]);
+
+        $request_permission_cache[$user_id] = array_fill_keys($stmt->fetchAll(PDO::FETCH_COLUMN), true);
+        $_SESSION['perms'] = $request_permission_cache[$user_id];
+    }
+
+    return isset($request_permission_cache[$user_id][$perm_name]);
+}
+
+function generateDeviceFingerprint()
+{
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+    $acceptLanguage = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'unknown';
+
+    return hash('sha256', $ip . '|' . $userAgent . '|' . $acceptLanguage);
+}
+
+function ensureUserSessionTables()
+{
+    global $pdo;
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            session_id VARCHAR(255) NOT NULL,
+            device_fingerprint VARCHAR(255) NULL,
+            ip_address VARCHAR(50),
+            user_agent TEXT,
+            device_type VARCHAR(50),
+            browser VARCHAR(100),
+            operating_system VARCHAR(100),
+            timezone VARCHAR(100),
+            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ended_at DATETIME NULL,
+            status ENUM('active', 'ended', 'terminated') DEFAULT 'active',
+            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_id (user_id),
+            INDEX idx_session_id (session_id),
+            INDEX idx_status (status),
+            INDEX idx_started_at (started_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     ");
-    $stmt->execute([$user_id, $perm_name]);
-    $has = (bool)$stmt->fetch();
 
-    // تخزين في الكاش
-    $_SESSION['perms'][$perm_name] = $has;
+    $columns = [
+        'device_fingerprint' => "ALTER TABLE user_sessions ADD COLUMN device_fingerprint VARCHAR(255) NULL AFTER session_id",
+        'browser' => "ALTER TABLE user_sessions ADD COLUMN browser VARCHAR(100) NULL AFTER device_type",
+        'operating_system' => "ALTER TABLE user_sessions ADD COLUMN operating_system VARCHAR(100) NULL AFTER browser",
+        'timezone' => "ALTER TABLE user_sessions ADD COLUMN timezone VARCHAR(100) NULL AFTER operating_system",
+        'last_activity' => "ALTER TABLE user_sessions ADD COLUMN last_activity DATETIME DEFAULT CURRENT_TIMESTAMP AFTER status"
+    ];
 
-    return $has;
+    foreach ($columns as $column => $sql) {
+        $check = $pdo->query("SHOW COLUMNS FROM user_sessions LIKE " . $pdo->quote($column));
+        if (!$check->fetch()) {
+            $pdo->exec($sql);
+        }
+    }
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS blocked_devices (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            device_fingerprint VARCHAR(255) NOT NULL,
+            ip_address VARCHAR(50),
+            user_agent TEXT,
+            reason TEXT,
+            blocked_by INT,
+            blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_active TINYINT(1) DEFAULT 1,
+            INDEX idx_user_id (user_id),
+            INDEX idx_device_fingerprint (device_fingerprint),
+            INDEX idx_is_active (is_active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+}
+
+function ensureUserActivityLogTable()
+{
+    global $pdo;
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS user_activity_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NULL,
+            username VARCHAR(100) NOT NULL,
+            full_name VARCHAR(255),
+            activity_type VARCHAR(100) NOT NULL,
+            activity_description TEXT,
+            ip_address VARCHAR(50),
+            user_agent TEXT,
+            device_type VARCHAR(50),
+            browser VARCHAR(100),
+            operating_system VARCHAR(100),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_id (user_id),
+            INDEX idx_activity_type (activity_type),
+            INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+
+    $columns = [
+        'browser' => "ALTER TABLE user_activity_logs ADD COLUMN browser VARCHAR(100) NULL AFTER device_type",
+        'operating_system' => "ALTER TABLE user_activity_logs ADD COLUMN operating_system VARCHAR(100) NULL AFTER browser"
+    ];
+
+    foreach ($columns as $column => $sql) {
+        $check = $pdo->query("SHOW COLUMNS FROM user_activity_logs LIKE " . $pdo->quote($column));
+        if (!$check->fetch()) {
+            $pdo->exec($sql);
+        }
+    }
+}
+
+function isDeviceBlocked($user_id, $device_fingerprint)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $stmt = $pdo->prepare("
+            SELECT id
+            FROM blocked_devices
+            WHERE user_id = ?
+              AND device_fingerprint = ?
+              AND is_active = 1
+            LIMIT 1
+        ");
+        $stmt->execute([$user_id, $device_fingerprint]);
+        return (bool)$stmt->fetch();
+    } catch (Throwable $e) {
+        error_log("Device block check error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function createUserSession($user_id)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+
+        $settings = getSettings($pdo);
+        $allowMultiple = !empty($settings['allow_multiple_sessions']) && $settings['allow_multiple_sessions'] !== '0';
+        $sessionBehavior = $settings['session_behavior'] ?? 'terminate_old';
+
+        if (!$allowMultiple) {
+            if ($sessionBehavior === 'reject_new') {
+                $active = $pdo->prepare("SELECT COUNT(*) FROM user_sessions WHERE user_id = ? AND status = 'active'");
+                $active->execute([$user_id]);
+                if ((int)$active->fetchColumn() > 0) {
+                    return ['success' => false, 'message' => 'لديك جلسة نشطة بالفعل. يرجى تسجيل الخروج من الجهاز الآخر أولاً.'];
+                }
+            } else {
+                $stmt = $pdo->prepare("UPDATE user_sessions SET status = 'terminated', ended_at = NOW() WHERE user_id = ? AND status = 'active'");
+                $stmt->execute([$user_id]);
+            }
+        }
+
+        $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
+        $stmt = $pdo->prepare("
+            INSERT INTO user_sessions
+                (user_id, session_id, device_fingerprint, ip_address, user_agent, device_type, browser, operating_system, timezone, status)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        ");
+        $stmt->execute([
+            $user_id,
+            session_id(),
+            generateDeviceFingerprint(),
+            $_SERVER['REMOTE_ADDR'] ?? null,
+            $_SERVER['HTTP_USER_AGENT'] ?? null,
+            $ua['device'] ?? null,
+            $ua['browser'] ?? null,
+            $ua['os'] ?? null,
+            $settings['timezone'] ?? date_default_timezone_get()
+        ]);
+
+        return ['success' => true, 'session_id' => $pdo->lastInsertId()];
+    } catch (Throwable $e) {
+        error_log("Create user session error: " . $e->getMessage());
+        return ['success' => false, 'message' => 'تعذر إنشاء جلسة المستخدم.'];
+    }
+}
+
+function updateSessionActivity($session_id = null)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $session_id = $session_id ?: session_id();
+        $stmt = $pdo->prepare("UPDATE user_sessions SET last_activity = NOW() WHERE session_id = ? AND status = 'active'");
+        $stmt->execute([$session_id]);
+        return true;
+    } catch (Throwable $e) {
+        error_log("Update session activity error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function terminateUserSession($session_id)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $stmt = $pdo->prepare("SELECT us.*, u.username, u.full_name FROM user_sessions us LEFT JOIN users u ON u.id = us.user_id WHERE us.id = ?");
+        $stmt->execute([(int)$session_id]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$session) {
+            return false;
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $upd = $pdo->prepare("UPDATE user_sessions SET status = 'terminated', ended_at = NOW() WHERE id = ? AND status = 'active'");
+            $upd->execute([(int)$session_id]);
+            if ($upd->rowCount() === 0) {
+                $pdo->rollBack();
+                return true;
+            }
+            if (!empty($session['session_id'])) {
+                try {
+                    $saveHandler = ini_get('session.save_handler');
+                    if ($saveHandler === 'files') {
+                        $savePath = session_save_path() ?: sys_get_temp_dir();
+                        $file = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $session['session_id'];
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                } catch (Throwable $e2) {
+                    error_log("Session file cleanup warning: " . $e2->getMessage());
+                }
+            }
+            $pdo->commit();
+            if (!empty($session['user_id'])) {
+                logUserActivity(
+                    (int)$session['user_id'],
+                    $session['username'] ?? 'unknown',
+                    $session['full_name'] ?? null,
+                    'session_terminated',
+                    'إنهاء الجلسة من قبل الإدارة [' . ((int)$_SESSION['admin_id'] ?? 0) . '] | IP: ' . ($session['ip_address'] ?? '?')
+                );
+            }
+            return true;
+        } catch (Throwable $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Throwable $e) {
+        error_log("Terminate session error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function endAllUserSessions($user_id)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $user_id = (int)$user_id;
+        if ($user_id <= 0) return false;
+
+        $pdo->beginTransaction();
+        try {
+            $sel = $pdo->prepare("SELECT session_id FROM user_sessions WHERE user_id = ? AND status = 'active'");
+            $sel->execute([$user_id]);
+            $sessIds = $sel->fetchAll(PDO::FETCH_COLUMN, 0);
+
+            $upd = $pdo->prepare("UPDATE user_sessions SET status = 'terminated', ended_at = NOW() WHERE user_id = ? AND status = 'active'");
+            $upd->execute([$user_id]);
+            $count = $upd->rowCount();
+
+            if ($count > 0) {
+                foreach ($sessIds as $sid) {
+                    if (!empty($sid)) {
+                        $saveHandler = ini_get('session.save_handler');
+                        if ($saveHandler === 'files') {
+                            $savePath = session_save_path() ?: sys_get_temp_dir();
+                            $file = $savePath . DIRECTORY_SEPARATOR . 'sess_' . $sid;
+                            if (is_file($file)) {
+                                @unlink($file);
+                            }
+                        }
+                    }
+                }
+                $pdo->commit();
+                $usr = $pdo->prepare("SELECT username, full_name FROM users WHERE id = ?");
+                $usr->execute([$user_id]);
+                $u = $usr->fetch();
+                logUserActivity(
+                    $user_id,
+                    $u['username'] ?? 'unknown',
+                    $u['full_name'] ?? null,
+                    'session_terminated',
+                    'إنهاء جميع الجلسات من قبل الإدارة [' . ((int)$_SESSION['admin_id'] ?? 0) . '] - عدد: ' . $count
+                );
+                return true;
+            }
+
+            $pdo->commit();
+            return true;
+        } catch (Throwable $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Throwable $e) {
+        error_log("End all sessions error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function blockDevice($session_id, $reason = '')
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $stmt = $pdo->prepare("SELECT us.*, u.username, u.full_name FROM user_sessions us LEFT JOIN users u ON u.id = us.user_id WHERE us.id = ?");
+        $stmt->execute([(int)$session_id]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$session) return false;
+
+        $fingerprint = $session['device_fingerprint'] ?: generateDeviceFingerprint();
+        $blocked_by = $_SESSION['admin_id'] ?? $_SESSION['user_id'] ?? null;
+
+        $pdo->beginTransaction();
+        try {
+            $exist = $pdo->prepare("SELECT id, is_active FROM blocked_devices WHERE user_id = ? AND device_fingerprint = ? LIMIT 1");
+            $exist->execute([$session['user_id'], $fingerprint]);
+            $row = $exist->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                if ($row['is_active']) {
+                    $pdo->commit();
+                    return terminateUserSession($session_id);
+                }
+                $reactivate = $pdo->prepare("UPDATE blocked_devices SET is_active = 1, reason = ?, blocked_by = ?, blocked_at = NOW(), ip_address = ?, user_agent = ? WHERE id = ?");
+                $reactivate->execute([
+                    $reason,
+                    $blocked_by,
+                    $session['ip_address'] ?? null,
+                    $session['user_agent'] ?? null,
+                    (int)$row['id']
+                ]);
+            } else {
+                $insert = $pdo->prepare("
+                    INSERT INTO blocked_devices
+                        (user_id, device_fingerprint, ip_address, user_agent, reason, blocked_by, blocked_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, NOW(), 1)
+                ");
+                $insert->execute([
+                    $session['user_id'],
+                    $fingerprint,
+                    $session['ip_address'] ?? null,
+                    $session['user_agent'] ?? null,
+                    $reason,
+                    $blocked_by
+                ]);
+            }
+
+            $pdo->commit();
+
+            logUserActivity(
+                (int)$session['user_id'],
+                $session['username'] ?? 'unknown',
+                $session['full_name'] ?? null,
+                'device_blocked',
+                'حظر الجهاز من قبل الإدارة [' . ((int)$blocked_by) . ']. السبب: ' . ($reason ?: 'غير محدد') . ' | IP: ' . ($session['ip_address'] ?? '?')
+            );
+
+            return terminateUserSession($session_id);
+        } catch (Throwable $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Throwable $e) {
+        error_log("Block device error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function unblockDevice($blocked_device_id)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $blocked_device_id = (int)$blocked_device_id;
+        if ($blocked_device_id <= 0) return false;
+
+        $pdo->beginTransaction();
+        try {
+            $sel = $pdo->prepare("SELECT bd.*, u.username, u.full_name FROM blocked_devices bd LEFT JOIN users u ON u.id = bd.user_id WHERE bd.id = ?");
+            $sel->execute([$blocked_device_id]);
+            $row = $sel->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                $pdo->rollBack();
+                return false;
+            }
+
+            $upd = $pdo->prepare("UPDATE blocked_devices SET is_active = 0 WHERE id = ? AND is_active = 1");
+            $upd->execute([$blocked_device_id]);
+            $pdo->commit();
+
+            logUserActivity(
+                (int)$row['user_id'],
+                $row['username'] ?? 'unknown',
+                $row['full_name'] ?? null,
+                'device_unblocked',
+                'إلغاء حظر الجهاز من قبل الإدارة [' . ((int)($_SESSION['admin_id'] ?? $_SESSION['user_id'] ?? 0)) . ']. IP محظور: ' . ($row['ip_address'] ?? '?')
+            );
+            return true;
+        } catch (Throwable $inner) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $inner;
+        }
+    } catch (Throwable $e) {
+        error_log("Unblock device error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function getBlockedDevices($user_id = null)
+{
+    global $pdo;
+
+    try {
+        ensureUserSessionTables();
+        $sql = "
+            SELECT bd.*, u.username, u.full_name
+            FROM blocked_devices bd
+            LEFT JOIN users u ON bd.user_id = u.id
+            WHERE 1=1
+        ";
+        $params = [];
+        if ($user_id) {
+            $sql .= " AND bd.user_id = ?";
+            $params[] = $user_id;
+        }
+        $sql .= " ORDER BY bd.blocked_at DESC";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    } catch (Throwable $e) {
+        error_log("Get blocked devices error: " . $e->getMessage());
+        return [];
+    }
+}
+
+function logUserActivity($user_id, $username, $full_name, $activity_type, $activity_description = '')
+{
+    global $pdo;
+
+    try {
+        ensureUserActivityLogTable();
+        $ua = parseUserAgent($_SERVER['HTTP_USER_AGENT'] ?? '');
+        $stmt = $pdo->prepare("
+            INSERT INTO user_activity_logs
+                (user_id, username, full_name, activity_type, activity_description, ip_address, user_agent, device_type, browser, operating_system)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $user_id,
+            $username ?: 'unknown',
+            $full_name,
+            $activity_type,
+            $activity_description,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+            $_SERVER['HTTP_USER_AGENT'] ?? null,
+            $ua['device'] ?? null,
+            $ua['browser'] ?? null,
+            $ua['os'] ?? null
+        ]);
+        return true;
+    } catch (Throwable $e) {
+        error_log("User activity log error: " . $e->getMessage());
+        return false;
+    }
 }
 
 /**
@@ -364,6 +989,69 @@ function has_permission($perm_name)
 /**
  * دالة معالجة رفع الملفات
  */
+if (!function_exists('format_date_display')) {
+    function format_date_display($date, $include_time = false)
+    {
+        if ($date === null || $date === '') {
+            return '-';
+        }
+
+        $timestamp = is_numeric($date) ? (int)$date : strtotime((string)$date);
+        if ($timestamp === false) {
+            return htmlspecialchars((string)$date, ENT_QUOTES, 'UTF-8');
+        }
+
+        return date($include_time ? 'Y-m-d H:i' : 'Y-m-d', $timestamp);
+    }
+}
+
+if (!function_exists('getUserStats')) {
+    function getUserStats()
+    {
+        global $pdo;
+
+        $stats = [
+            'active_users' => 0,
+            'inactive_users' => 0,
+            'online_now' => 0,
+            'active_sessions' => 0,
+            'logins_today' => 0,
+            'logouts_today' => 0,
+        ];
+
+        try {
+            ensureUserSessionTables();
+            ensureUserActivityLogTable();
+
+            $stats['active_users'] = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status = 'active'")->fetchColumn();
+            $stats['inactive_users'] = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE status <> 'active' OR status IS NULL")->fetchColumn();
+            $stats['active_sessions'] = (int)$pdo->query("SELECT COUNT(*) FROM user_sessions WHERE status = 'active'")->fetchColumn();
+            $stats['online_now'] = (int)$pdo->query("
+                SELECT COUNT(DISTINCT user_id)
+                FROM user_sessions
+                WHERE status = 'active'
+                  AND COALESCE(last_activity, started_at) >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+            ")->fetchColumn();
+            $stats['logins_today'] = (int)$pdo->query("
+                SELECT COUNT(*)
+                FROM user_activity_logs
+                WHERE DATE(created_at) = CURDATE()
+                  AND activity_type IN ('login', 'user_login', 'تسجيل دخول')
+            ")->fetchColumn();
+            $stats['logouts_today'] = (int)$pdo->query("
+                SELECT COUNT(*)
+                FROM user_activity_logs
+                WHERE DATE(created_at) = CURDATE()
+                  AND activity_type IN ('logout', 'user_logout', 'تسجيل خروج')
+            ")->fetchColumn();
+        } catch (Throwable $e) {
+            error_log("Get user stats error: " . $e->getMessage());
+        }
+
+        return $stats;
+    }
+}
+
 function handleFileUpload($file_key, $passport_number, $type, $traveler_name = '')
 {
     if (!isset($_FILES[$file_key]) || $_FILES[$file_key]['error'] !== UPLOAD_ERR_OK) {
@@ -433,10 +1121,173 @@ function get_umrah_settings($pdo)
     ];
 }
 
+if (!function_exists('get_module_definitions')) {
+    function get_module_definitions()
+    {
+        return [
+            'enable_bus_bookings' => 'Bus bookings',
+            'enable_flight_bookings' => 'Flight bookings',
+            'enable_passport_transactions' => 'Passport transactions',
+            'enable_work_visa' => 'Work visa',
+            'enable_family_visit' => 'Family visit',
+            'enable_postal_services' => 'Postal services',
+            'enable_umrah' => 'Umrah',
+            'enable_hajj' => 'Hajj',
+            'enable_crm' => 'CRM',
+        ];
+    }
+}
+
+if (!function_exists('normalize_bool_setting')) {
+    function normalize_bool_setting($value)
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        return in_array($normalized, ['1', 'true', 'yes', 'on', 'enabled'], true);
+    }
+}
+
+if (!function_exists('currentUserIsAdmin')) {
+    function currentUserIsAdmin()
+    {
+        if (empty($_SESSION['admin_id']) && empty($_SESSION['user_id'])) {
+            return false;
+        }
+        $role = $_SESSION['role'] ?? '';
+        if (is_string($role)) {
+            $role_l = strtolower($role);
+            if (in_array($role_l, ['superadmin', 'admin', 'owner', 'مدير', 'مالك', 'مشرف'], true)) {
+                return true;
+            }
+        }
+        if (function_exists('hasPermission') && !empty($_SESSION['user_id'])) {
+            if (hasPermission($_SESSION['user_id'], 'manage_users')
+                || hasPermission($_SESSION['user_id'], 'manage_sessions')
+                || hasPermission($_SESSION['user_id'], 'system_settings')) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+if (!function_exists('requireAdminAccess')) {
+    function requireAdminAccess()
+    {
+        if (!currentUserIsAdmin()) {
+            $_SESSION['flash_message'] = [
+                'type'  => 'danger',
+                'title' => 'صلاحية مرفوضة',
+                'body'  => 'ليس لديك صلاحية للوصول إلى هذه الصفحة.'
+            ];
+            header('Location: index.php');
+            exit();
+        }
+    }
+}
+
+if (!function_exists('getDeviceTypeLabel')) {
+    function getDeviceTypeLabel($type_en)
+    {
+        $map = [
+            'mobile'  => 'جوال',
+            'tablet'  => 'تابلت',
+            'desktop' => 'كمبيوتر',
+            'جوال'   => 'جوال',
+            'تابلت' => 'تابلت',
+            'كمبيوتر' => 'كمبيوتر'
+        ];
+        return $map[$type_en] ?? ($type_en ?: 'غير معروف');
+    }
+}
+
+if (!function_exists('getActivityTypeLabel')) {
+    function getActivityTypeLabel($type)
+    {
+        $map = [
+            'login'          => ['label' => 'تسجيل دخول',   'class' => 'success'],
+            'user_login'     => ['label' => 'تسجيل دخول',   'class' => 'success'],
+            'logout'         => ['label' => 'تسجيل خروج',   'class' => 'danger'],
+            'user_logout'    => ['label' => 'تسجيل خروج',   'class' => 'danger'],
+            'login_failed'   => ['label' => 'فشل تسجيل دخول', 'class' => 'warning'],
+            'login_blocked'  => ['label' => 'جهاز محظور',   'class' => 'dark'],
+            'session_terminated' => ['label' => 'إنهاء جلسة', 'class' => 'danger'],
+            'device_blocked' => ['label' => 'حظر جهاز',     'class' => 'warning'],
+            'device_unblocked' => ['label' => 'إلغاء حظر جهاز', 'class' => 'success'],
+            'password_change' => ['label' => 'تغيير كلمة مرور', 'class' => 'info'],
+            'create'         => ['label' => 'إنشاء',         'class' => 'primary'],
+            'update'         => ['label' => 'تحديث',         'class' => 'primary'],
+            'delete'         => ['label' => 'حذف',           'class' => 'danger'],
+            'post'           => ['label' => 'ترحيل',         'class' => 'success'],
+            'unpost'         => ['label' => 'إلغاء ترحيل',   'class' => 'warning'],
+        ];
+        if (isset($map[$type])) {
+            return $map[$type];
+        }
+        return ['label' => $type, 'class' => 'secondary'];
+    }
+}
+
+if (!function_exists('reload_module_settings_cache')) {
+    function reload_module_settings_cache()
+    {
+        unset($_SESSION['settings_cache'], $_SESSION['module_settings_cache']);
+    }
+}
+
 function get_module_status($pdo, $module_name)
 {
     $settings = getSettings($pdo);
-    return (bool) ($settings[$module_name] ?? false);
+    return normalize_bool_setting($settings[$module_name] ?? false);
+}
+
+if (!function_exists('get_umrah_service_aliases')) {
+    function get_umrah_service_aliases()
+    {
+        return ['خدمات العمرة', 'قسم العمرة', 'حج وعمرة', 'خدمات الحج والعمرة', 'umrah'];
+    }
+}
+
+if (!function_exists('get_hajj_service_aliases')) {
+    function get_hajj_service_aliases()
+    {
+        return ['خدمات الحج', 'hajj'];
+    }
+}
+
+if (!function_exists('get_postal_service_aliases')) {
+    function get_postal_service_aliases()
+    {
+        return ['خدمات البريد', 'postal_services', 'postal'];
+    }
+}
+
+if (!function_exists('is_umrah_service')) {
+    function is_umrah_service($service_type)
+    {
+        return in_array(trim((string) $service_type), get_umrah_service_aliases(), true);
+    }
+}
+
+if (!function_exists('is_hajj_service')) {
+    function is_hajj_service($service_type)
+    {
+        return in_array(trim((string) $service_type), get_hajj_service_aliases(), true);
+    }
+}
+
+if (!function_exists('is_postal_service')) {
+    function is_postal_service($service_type)
+    {
+        return in_array(trim((string) $service_type), get_postal_service_aliases(), true);
+    }
 }
 
 function check_user_dependencies($pdo, $user_id)
@@ -927,7 +1778,7 @@ function post_booking_to_financials($booking_id, $user_id)
             $booking['sale_price'],
             0,
             $booking['purchase_price'],
-            $booking['payment_type'],
+            'draft',
             $description,
             $user_id,
             $booking['agent_id']
@@ -954,7 +1805,10 @@ function post_booking_to_financials($booking_id, $user_id)
                     $party_account_id,
                     "دفعة مقدمة للحجز: " . $booking['booking_number'],
                     $booking['booking_number'],
-                    json_encode([['invoice_id' => $invoice_id, 'amount' => $booking['amount_received']]])
+                    json_encode([['invoice_id' => $invoice_id, 'amount' => $booking['amount_received']]]),
+                    null,
+                    null,
+                    false
                 );
             }
         }
@@ -995,7 +1849,7 @@ function post_passport_to_financials($passport_id, $user_id)
             $trx['sale_price'],
             0,
             $trx['purchase_price'],
-            $trx['payment_type'] ?? 'credit',
+            'draft',
             $description,
             $user_id,
             $trx['agent_id']
@@ -1020,7 +1874,10 @@ function post_passport_to_financials($passport_id, $user_id)
                     $party_account_id,
                     "دفعة مقدمة للمعاملة: " . $trx['passport_number'],
                     $trx['passport_number'],
-                    json_encode([['invoice_id' => $invoice_id, 'amount' => $trx['amount_received']]])
+                    json_encode([['invoice_id' => $invoice_id, 'amount' => $trx['amount_received']]]),
+                    null,
+                    null,
+                    false
                 );
             }
         }
@@ -1061,7 +1918,7 @@ function post_passport_transaction_to_financials($transaction_id, $user_id)
             $trx['sale_price'],
             0,
             $trx['purchase_price'],
-            $trx['payment_type'],
+            'draft',
             $description,
             $user_id,
             $trx['agent_id']
@@ -1086,7 +1943,10 @@ function post_passport_transaction_to_financials($transaction_id, $user_id)
                     $party_account_id,
                     "دفعة مقدمة للمعاملة: " . $trx['transaction_number'],
                     $trx['transaction_number'],
-                    json_encode([['invoice_id' => $invoice_id, 'amount' => $trx['amount_received']]])
+                    json_encode([['invoice_id' => $invoice_id, 'amount' => $trx['amount_received']]]),
+                    null,
+                    null,
+                    false
                 );
             }
         }
@@ -1130,7 +1990,7 @@ function post_family_visit_to_financials($request_id, $user_id)
             $total_sale,
             0,
             $total_cost,
-            $req['payment_type'] ?? 'credit',
+            'draft',
             $description,
             $user_id,
             $req['agent_id']
@@ -1155,7 +2015,10 @@ function post_family_visit_to_financials($request_id, $user_id)
                     $party_account_id,
                     "دفعة مقدمة للزيارة العائلية: " . $req['document_no'],
                     $req['document_no'],
-                    json_encode([['invoice_id' => $invoice_id, 'amount' => $req['amount_received']]])
+                    json_encode([['invoice_id' => $invoice_id, 'amount' => $req['amount_received']]]),
+                    null,
+                    null,
+                    false
                 );
             }
         }
@@ -1528,60 +2391,78 @@ function log_audit($pdo, $action_type, $table_name, $record_id = null, $old_data
 
 function parseUserAgent($ua)
 {
-    if (empty($ua)) return 'غير معروف';
-
-    $os = 'غير معروف';
-    $browser = 'غير معروف';
-    $device = 'كمبيوتر';
-    $device_brand = '';
-
-    // Device Type & Brand detection
-    if (preg_match('/(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino/i', $ua)) {
-        $device = 'جوال';
-    } elseif (preg_match('/tablet|ipad|playbook|silk/i', $ua)) {
-        $device = 'تابلت';
+    if (empty($ua)) {
+        return [
+            'os'          => 'Unknown',
+            'os_ar'       => 'غير معروف',
+            'browser'     => 'Unknown',
+            'browser_ar'  => 'غير معروف',
+            'device'      => 'desktop',
+            'device_ar'   => 'كمبيوتر',
+            'icon'        => 'fas fa-globe',
+            'os_icon'     => 'fas fa-laptop',
+            'device_icon' => 'fas fa-desktop'
+        ];
     }
 
-    // OS
-    if (preg_match('/windows|win32/i', $ua)) $os = 'Windows';
-    elseif (preg_match('/android/i', $ua)) $os = 'Android';
-    elseif (preg_match('/iphone|ipad|ipod/i', $ua)) $os = 'iOS';
-    elseif (preg_match('/linux/i', $ua)) $os = 'Linux';
-    elseif (preg_match('/macintosh|mac os x/i', $ua)) $os = 'macOS';
+    $os_en = 'Unknown';
+    $os_ar = 'غير معروف';
+    $browser_en = 'Unknown';
+    $browser_ar = 'غير معروف';
+    $device_en = 'desktop';
+    $device_ar = 'كمبيوتر';
 
-    // Browser
-    if (preg_match('/msie|trident/i', $ua)) $browser = 'Internet Explorer';
-    elseif (preg_match('/edge|edg/i', $ua)) $browser = 'Edge';
-    elseif (preg_match('/firefox/i', $ua)) $browser = 'Firefox';
-    elseif (preg_match('/opr\/|opera/i', $ua)) $browser = 'Opera';
-    elseif (preg_match('/chrome/i', $ua)) $browser = 'Chrome';
-    elseif (preg_match('/safari/i', $ua)) $browser = 'Safari';
+    if (preg_match('/(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino/i', $ua)) {
+        $device_en = 'mobile';
+        $device_ar = 'جوال';
+    } elseif (preg_match('/tablet|ipad|playbook|silk/i', $ua)) {
+        $device_en = 'tablet';
+        $device_ar = 'تابلت';
+    }
+
+    if (preg_match('/windows|win32/i', $ua)) { $os_en = 'Windows'; $os_ar = 'ويندوز'; }
+    elseif (preg_match('/android/i', $ua))   { $os_en = 'Android'; $os_ar = 'أندرويد'; }
+    elseif (preg_match('/iphone|ipad|ipod/i', $ua)) { $os_en = 'iOS'; $os_ar = 'iOS'; }
+    elseif (preg_match('/linux/i', $ua))     { $os_en = 'Linux'; $os_ar = 'لينكس'; }
+    elseif (preg_match('/macintosh|mac os x/i', $ua)) { $os_en = 'macOS'; $os_ar = 'ماك أو إس'; }
+
+    if (preg_match('/msie|trident/i', $ua)) { $browser_en = 'Internet Explorer'; $browser_ar = 'إنترنت إكسبلورر'; }
+    elseif (preg_match('/edge|edg/i', $ua)) { $browser_en = 'Edge'; $browser_ar = 'إيدج'; }
+    elseif (preg_match('/firefox/i', $ua))  { $browser_en = 'Firefox'; $browser_ar = 'فَيَرفُوكس'; }
+    elseif (preg_match('/opr\/|opera/i', $ua)) { $browser_en = 'Opera'; $browser_ar = 'أوبرا'; }
+    elseif (preg_match('/chrome/i', $ua))   { $browser_en = 'Chrome'; $browser_ar = 'كُرُوم'; }
+    elseif (preg_match('/safari/i', $ua))   { $browser_en = 'Safari'; $browser_ar = 'سَفَارِي'; }
+
+    $lower_browser = strtolower($browser_en);
+    $lower_os = strtolower($os_en);
+    $icon = 'fas fa-globe';
+    if (strpos($lower_browser, 'chrome') !== false) $icon = 'fab fa-chrome';
+    elseif (strpos($lower_browser, 'firefox') !== false) $icon = 'fab fa-firefox';
+    elseif (strpos($lower_browser, 'safari') !== false) $icon = 'fab fa-safari';
+    elseif (strpos($lower_browser, 'edge') !== false) $icon = 'fab fa-edge';
+    elseif (strpos($lower_browser, 'opera') !== false) $icon = 'fab fa-opera';
+    elseif (strpos($lower_browser, 'explorer') !== false) $icon = 'fab fa-internet-explorer';
+
+    $os_icon = 'fas fa-laptop';
+    if ($lower_os === 'windows') $os_icon = 'fab fa-windows';
+    elseif ($lower_os === 'android') $os_icon = 'fab fa-android';
+    elseif (in_array($lower_os, ['ios', 'macos'], true)) $os_icon = 'fab fa-apple';
+    elseif ($lower_os === 'linux') $os_icon = 'fab fa-linux';
+
+    $device_icon = 'fas fa-desktop';
+    if ($device_en === 'mobile') $device_icon = 'fas fa-mobile-alt';
+    elseif ($device_en === 'tablet') $device_icon = 'fas fa-tablet-alt';
 
     return [
-        'os' => $os,
-        'browser' => $browser,
-        'device' => $device,
-        'icon' => match (true) {
-            strpos(strtolower($browser), 'chrome') !== false => 'fab fa-chrome',
-            strpos(strtolower($browser), 'firefox') !== false => 'fab fa-firefox',
-            strpos(strtolower($browser), 'safari') !== false => 'fab fa-safari',
-            strpos(strtolower($browser), 'edge') !== false => 'fab fa-edge',
-            strpos(strtolower($browser), 'opera') !== false => 'fab fa-opera',
-            strpos(strtolower($browser), 'explorer') !== false => 'fab fa-internet-explorer',
-            default => 'fas fa-globe'
-        },
-        'os_icon' => match (strtolower($os)) {
-            'windows' => 'fab fa-windows',
-            'android' => 'fab fa-android',
-            'ios', 'macos' => 'fab fa-apple',
-            'linux' => 'fab fa-linux',
-            default => 'fas fa-laptop'
-        },
-        'device_icon' => match ($device) {
-            'جوال' => 'fas fa-mobile-alt',
-            'تابلت' => 'fas fa-tablet-alt',
-            default => 'fas fa-desktop'
-        }
+        'os'          => $os_en,
+        'os_ar'       => $os_ar,
+        'browser'     => $browser_en,
+        'browser_ar'  => $browser_ar,
+        'device'      => $device_en,
+        'device_ar'   => $device_ar,
+        'icon'        => $icon,
+        'os_icon'     => $os_icon,
+        'device_icon' => $device_icon
     ];
 }
 

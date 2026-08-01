@@ -14,15 +14,15 @@ $page_title = "تقارير الرسائل";
 
 // جلب الإحصائيات
 $new_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_messages WHERE created_at >= CURDATE() - INTERVAL 1 DAY")->fetchColumn();
-$new_group_messages_count = $pdo->query("SELECT COUNT(*) FROM group_messages WHERE created_at >= CURDATE() - INTERVAL 1 DAY")->fetchColumn();
+$new_group_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_group_messages WHERE created_at >= CURDATE() - INTERVAL 1 DAY")->fetchColumn();
 $total_new_count = $new_messages_count + $new_group_messages_count;
 
 $edited_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_messages WHERE is_edited = 1 AND (is_deleted_for_all = 0 OR is_deleted_for_all IS NULL)")->fetchColumn();
-$edited_group_messages_count = $pdo->query("SELECT COUNT(*) FROM group_messages WHERE is_edited = 1 AND is_deleted = 0")->fetchColumn();
+$edited_group_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_group_messages WHERE is_edited = 1 AND is_deleted = 0")->fetchColumn();
 $total_edited_count = $edited_messages_count + $edited_group_messages_count;
 
 $deleted_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_messages WHERE (is_deleted_for_all = 1 OR is_deleted_by_sender = 1 OR is_deleted_by_receiver = 1)")->fetchColumn();
-$deleted_group_messages_count = $pdo->query("SELECT COUNT(*) FROM group_messages WHERE is_deleted = 1")->fetchColumn();
+$deleted_group_messages_count = $pdo->query("SELECT COUNT(*) FROM internal_group_messages WHERE is_deleted = 1")->fetchColumn();
 $total_deleted_count = $deleted_messages_count + $deleted_group_messages_count;
 
 // جلب الرسائل حسب الفلتر (دمج الرسائل الفردية والجماعية)
@@ -37,9 +37,9 @@ $sql_internal = "SELECT im.id, im.sender_id, im.message, im.original_message, im
 
 $sql_group = "SELECT gm.id, gm.sender_id, gm.message, gm.original_message, gm.created_at, gm.updated_at, gm.is_edited, gm.is_deleted, 
              s.full_name as sender_name, g.name as receiver_name, 'جماعية' as type 
-             FROM group_messages gm 
+             FROM internal_group_messages gm 
              JOIN users s ON gm.sender_id = s.id 
-             JOIN message_groups g ON gm.group_id = g.id";
+             JOIN internal_groups g ON gm.group_id = g.id";
 
 $where_internal = [];
 $where_group = [];

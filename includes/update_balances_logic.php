@@ -15,7 +15,6 @@ if (isset($this_pdo) && isset($this_trx_id)) {
     foreach ($lines as $line) {
         $account_id = $line['account_id'];
         $currency_id = $line['currency_id'];
-        $line_branch_id = $line['branch_id'] ?? $branch_id;
         $amount = $line['debit'] - $line['credit'];
 
         // جلب سعر الصرف للعملة الأساسية
@@ -26,20 +25,13 @@ if (isset($this_pdo) && isset($this_trx_id)) {
         $currency_code = $curr['currency_code'] ?? '';
         $amount_base = $amount * $rate;
 
-        // First check if the row exists
-        if ($line_branch_id === null) {
-            $stmt_check = $this_pdo->prepare("
-                SELECT id FROM account_balances_unified 
-                WHERE account_id = ? AND branch_id IS NULL AND currency_id = ?
-            ");
-            $stmt_check->execute([$account_id, $currency_id]);
-        } else {
-            $stmt_check = $this_pdo->prepare("
-                SELECT id FROM account_balances_unified 
-                WHERE account_id = ? AND branch_id = ? AND currency_id = ?
-            ");
-            $stmt_check->execute([$account_id, $line_branch_id, $currency_id]);
-        }
+        // تفعيل العملة أصبح على مستوى الحساب + العملة لجميع الفروع.
+        $stmt_check = $this_pdo->prepare("
+            SELECT id FROM account_balances_unified 
+            WHERE account_id = ? AND currency_id = ?
+            LIMIT 1
+        ");
+        $stmt_check->execute([$account_id, $currency_id]);
         $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
 
         if ($exists) {
@@ -62,7 +54,7 @@ if (isset($this_pdo) && isset($this_trx_id)) {
                     opening_balance_base, credit_limit, debit_limit, is_frozen
                 ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0)
             ");
-            $stmt_ins->execute([$account_id, $line_branch_id, $currency_id, $currency_code, $amount, $amount_base]);
+            $stmt_ins->execute([$account_id, null, $currency_id, $currency_code, $amount, $amount_base]);
         }
     }
 }

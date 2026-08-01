@@ -5,6 +5,12 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 
 header('Content-Type: application/json');
 
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'message' => 'طريقة الطلب غير مدعومة.']);
+    exit;
+}
+
 if (!isset($_SESSION['admin_id'])) {
     echo json_encode(['success' => false, 'message' => 'انتهت الجلسة، يرجى تسجيل الدخول']);
     exit;
@@ -12,6 +18,26 @@ if (!isset($_SESSION['admin_id'])) {
 
 if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
     echo json_encode(['success' => false, 'message' => 'خطأ في التحقق من الطلب (CSRF).']);
+    exit;
+}
+
+function has_permission_v3_ajax($permission_code)
+{
+    global $pdo;
+    $user_role = $_SESSION['role_name'] ?? $_SESSION['role'] ?? '';
+    $user_role_id = (int)($_SESSION['role_id'] ?? 0);
+    if ($user_role === 'developer' || $user_role_id === 2) {
+        return true;
+    }
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM role_permissions_unified rp JOIN unified_permissions p ON rp.permission_id = p.id WHERE rp.role_id = ? AND p.permission_code = ?");
+    $stmt->execute([$user_role_id, $permission_code]);
+    return $stmt->fetchColumn() > 0;
+}
+
+if (!has_permission_v3_ajax('voucher_create')) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'ليس لديك صلاحية لإنشاء سندات السداد.']);
     exit;
 }
 

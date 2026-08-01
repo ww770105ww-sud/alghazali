@@ -3,6 +3,12 @@ require_once 'header.php';
 require_once '../includes/accounting_functions.php';
 require_once '../includes/CurrencyExchange.php';
 
+$nationalities = [
+    'أفغاني', 'ألباني', 'جزائري', 'أمريكي', 'أندوري', 'أنغولي', 'أرجنتيني', 'أرميني', 'أسترالي', 'نمساوي', 'أذربيجاني',
+    'بحريني', 'بنغلاديشي', 'بلجيكي', 'بوليفي', 'بوسني', 'برازيلي', 'بريطاني', 'بلغاري', 'كمبودي', 'كندي', 'تشيلي', 'صيني', 'كولومبي', 'كوستاريكي', 'كرواتي', 'كوبي', 'قبرصي', 'تشيكي',
+    'دنماركي', 'دومينيكي', 'إكوادوري', 'مصري', 'سلفادوري', 'إستوني', 'إثيوبي', 'فيجي', 'فنلندي', 'فرنسي', 'ألماني', 'غاني', 'يوناني', 'غواتيمالي', 'هندوراسي', 'هندي', 'إندونيسي', 'إيراني', 'عراقي', 'أيرلندي', 'إسرائيلي', 'إيطالي', 'جامايكي', 'ياباني', 'أردني', 'كازاخستاني', 'كيني', 'كويتي', 'لاوسي', 'لاتفي', 'لبناني', 'ليبي', 'ليتواني', 'ماليزي', 'مالديفي', 'مالطي', 'موريتاني', 'مكسيكي', 'مولدوفي', 'مغربي', 'نيبالي', 'هولندي', 'نيوزيلندي', 'نيجيري', 'نرويجي', 'عماني', 'باكستاني', 'فلسطيني', 'بنغلاديشي', 'بيروفي', 'فلبيني', 'بولندي', 'برتغالي', 'قطري', 'روماني', 'روسي', 'سعودي', 'سنغالي', 'صربي', 'سنغافوري', 'سلوفاكي', 'سلوفيني', 'صومالي', 'جنوب أفريقي', 'كوري جنوبي', 'إسباني', 'سريلانكي', 'سوداني', 'سويدي', 'سويسري', 'سوري', 'تايواني', 'تنزاني', 'تايلاندي', 'تونسي', 'تركي', 'أوغندي', 'أوكراني', 'إماراتي', 'أوروغوياني', 'فنزويلي', 'فيتنامي', 'يمني', 'زامبي', 'زيمبابوي',
+];
+
 $currencyExchange = new CurrencyExchange($pdo);
 $baseCurrency = $currencyExchange->getBaseCurrency();
 $base_currency_id = $baseCurrency['id'] ?? null;
@@ -11,6 +17,10 @@ $base_currency_id = $baseCurrency['id'] ?? null;
 if (!has_permission('manage_financial_accounts')) {
     echo "<script>alert('ليس لديك صلاحية للوصول لهذه الصفحة'); location.href='index.php';</script>";
     exit();
+}
+
+if (isset($_GET['deactivate']) || isset($_GET['delete_permanent'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
 }
 
 // إضافة عميل جديد
@@ -23,6 +33,12 @@ if (isset($_POST['add_customer_account'])) {
     $opening_balance = $_POST['opening_balance'] ?? 0;
     $currency_id = $_POST['currency_id'] ?? 1;
     $status = $_POST['status'] == 'active' ? 'active' : $_POST['status'];
+    $phone = $_POST['phone'] ?? null;
+    $whatsapp = $_POST['whatsapp'] ?? null;
+    $nationality = $_POST['nationality'] ?? null;
+    $start_date = $_POST['start_date'] ?? null;
+    $address = $_POST['address'] ?? null;
+    $notes = $_POST['notes'] ?? null;
 
     try {
         $pdo->beginTransaction();
@@ -69,12 +85,12 @@ if (isset($_POST['add_customer_account'])) {
             $opening_balance_base = $opening_balance_for_base * $rate;
             
             $stmt_base_balance = $pdo->prepare("INSERT INTO account_balances_unified (account_id, branch_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
-            $stmt_base_balance->execute([$new_account_id, $branch_id, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
+            $stmt_base_balance->execute([$new_account_id, null, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
         }
 
         // Also insert into customers table!
-        $insertCustomerStmt = $pdo->prepare("INSERT INTO customers (full_name, account_id, created_at, status) VALUES (?, ?, NOW(), ?)");
-        $insertCustomerStmt->execute([$account_name, $new_account_id, $status]);
+        $insertCustomerStmt = $pdo->prepare("INSERT INTO customers (full_name, account_id, phone, whatsapp, nationality, start_date, address, notes, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)");
+        $insertCustomerStmt->execute([$account_name, $new_account_id, $phone, $whatsapp, $nationality, $start_date, $address, $notes, $status]);
         
         $pdo->commit();
         echo "<script>location.href='customers.php?success=1';</script>";
@@ -94,6 +110,12 @@ if (isset($_POST['update_customer_account'])) {
     $account_name = $_POST['account_name'];
     $new_status = $_POST['status'];
     $branch_id = $_POST['branch_id'] ?: null;
+    $phone = $_POST['phone'] ?? null;
+    $whatsapp = $_POST['whatsapp'] ?? null;
+    $nationality = $_POST['nationality'] ?? null;
+    $start_date = $_POST['start_date'] ?? null;
+    $address = $_POST['address'] ?? null;
+    $notes = $_POST['notes'] ?? null;
     
     try {
         $pdo->beginTransaction();
@@ -115,6 +137,10 @@ if (isset($_POST['update_customer_account'])) {
         
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_name_ar = ?, account_status = ?, branch_id = ? WHERE id = ?");
         $stmt->execute([$account_name, $new_status, $branch_id, $id]);
+
+        // Update customers table as well
+        $updateCustomerStmt = $pdo->prepare("UPDATE customers SET full_name = ?, phone = ?, whatsapp = ?, nationality = ?, start_date = ?, address = ?, notes = ?, status = ?, updated_at = NOW() WHERE account_id = ?");
+        $updateCustomerStmt->execute([$account_name, $phone, $whatsapp, $nationality, $start_date, $address, $notes, $new_status, $id]);
         
         $pdo->commit();
         echo "<script>location.href='customers.php?success=2';</script>";
@@ -125,9 +151,12 @@ if (isset($_POST['update_customer_account'])) {
     }
 }
 
-// تحويل إلى خامل
-if (isset($_GET['deactivate'])) {
-    $id = (int)$_GET['deactivate'];
+// تحويل إلى خامل عبر POST + CSRF
+if (isset($_POST['deactivate_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='customers.php';</script>");
+    }
+    $id = (int)$_POST['deactivate_account'];
     try {
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
         $stmt->execute([$id]);
@@ -138,9 +167,12 @@ if (isset($_GET['deactivate'])) {
     }
 }
 
-// حذف نهائي
-if (isset($_GET['delete_permanent'])) {
-    $id = (int)$_GET['delete_permanent'];
+// حذف نهائي عبر POST + CSRF
+if (isset($_POST['delete_account_permanent'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='customers.php';</script>");
+    }
+    $id = (int)$_POST['delete_account_permanent'];
     try {
         $pdo->beginTransaction();
         
@@ -160,6 +192,10 @@ if (isset($_GET['delete_permanent'])) {
         // حذف الأرصدة المرتبطة بالحساب
         $stmt_del_bal = $pdo->prepare("DELETE FROM account_balances_unified WHERE account_id = ?");
         $stmt_del_bal->execute([$id]);
+
+        // حذف من جدول customers
+        $stmt_del_customer = $pdo->prepare("DELETE FROM customers WHERE account_id = ?");
+        $stmt_del_customer->execute([$id]);
 
         // حذف الحساب من شجرة الحسابات الموحدة
         $stmt = $pdo->prepare("DELETE FROM unified_accounts WHERE id = ?");
@@ -189,42 +225,59 @@ if (!empty($_GET['q'])) {
 }
 
 $customers_stmt = $pdo->prepare("
-    SELECT coa.*, p.account_name_ar as parent_name, b.branch_name
+    SELECT coa.*, p.account_name_ar as parent_name, b.branch_name,
+           c.id as customer_id, c.phone, c.whatsapp, c.nationality,
+           c.start_date, c.address, c.notes, c.created_at, c.updated_at, c.status as customer_status
     FROM unified_accounts coa
     LEFT JOIN unified_accounts p ON coa.parent_id = p.id
     LEFT JOIN branches b ON coa.branch_id = b.id
+    LEFT JOIN customers c ON coa.id = c.account_id
     $where
     ORDER BY coa.account_code ASC
 ");
 $customers_stmt->execute($params);
 $customers = $customers_stmt->fetchAll();
 
-// جلب الأرصدة لكل العملاء دفعة واحدة
+// جلب الأرصدة لكل العملاء دفعة واحدة من account_balances_unified
 $customer_ids = array_column($customers, 'id');
 $balances = [];
+$customer_totals = []; // لتخزين إجمالي لكل عميل
+$total_debit = 0; // إجمالي لنا (العميل يدين لنا)
+$total_credit = 0; // إجمالي علينا (ندين للعميل)
 if (!empty($customer_ids)) {
     $placeholders = implode(',', array_fill(0, count($customer_ids), '?'));
     $bal_stmt = $pdo->prepare("
-        SELECT ab.*, c.currency_name, c.currency_symbol 
-        FROM account_balances_unified ab 
-        JOIN currencies c ON ab.currency_id = c.id 
-        WHERE ab.account_id IN ($placeholders)
+        SELECT
+            abu.account_id,
+            abu.currency_id,
+            c.currency_name,
+            c.currency_symbol,
+            c.currency_code,
+            abu.current_balance,
+            abu.current_balance_base,
+            ua.normal_balance
+        FROM account_balances_unified abu
+        LEFT JOIN currencies c ON abu.currency_id = c.id
+        LEFT JOIN unified_accounts ua ON abu.account_id = ua.id
+        WHERE abu.account_id IN ($placeholders)
+        ORDER BY abu.account_id ASC, c.currency_name ASC
     ");
     $bal_stmt->execute($customer_ids);
     while ($row = $bal_stmt->fetch()) {
         $balances[$row['account_id']][] = $row;
-    }
-}
-
-$total_balance = 0;
-$currency_name = '';
-if (!empty($customers)) {
-    foreach ($customers as $c) {
-        if (isset($balances[$c['id']])) {
-            foreach ($balances[$c['id']] as $bal) {
-                $total_balance += (float)$bal['current_balance'];
-                if (!$currency_name) $currency_name = $bal['currency_name'];
-            }
+        
+        // Initialize customer totals if not set
+        if (!isset($customer_totals[$row['account_id']])) {
+            $customer_totals[$row['account_id']] = ['debit' => 0, 'credit' => 0];
+        }
+        
+        // Calculate per-customer totals
+        if ($row['current_balance_base'] > 0) {
+            $customer_totals[$row['account_id']]['debit'] += $row['current_balance_base'];
+            $total_debit += $row['current_balance_base'];
+        } else {
+            $customer_totals[$row['account_id']]['credit'] += abs($row['current_balance_base']);
+            $total_credit += abs($row['current_balance_base']);
         }
     }
 }
@@ -235,14 +288,93 @@ $branches = $pdo->query("SELECT id, branch_name FROM branches")->fetchAll();
 $page_title = "إدارة العملاء";
 ?>
 
+<style>
+        /* Ensure modal footer is visible in dark theme */
+        #addCustomerModal .modal-footer,
+        #editCustomerModal .modal-footer {
+            background-color: #f8f9fa !important;
+            border-top: 1px solid #dee2e6 !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+            gap: 1rem !important;
+            padding: 1.5rem !important;
+            position: sticky !important;
+            bottom: 0 !important;
+            z-index: 1051 !important;
+        }
+
+        /* Ensure modal header is visible */
+        #addCustomerModal .modal-header,
+        #editCustomerModal .modal-header {
+            background-color: #0d6efd !important;
+            color: white !important;
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 1051 !important;
+        }
+
+        #addCustomerModal .modal-footer button,
+        #editCustomerModal .modal-footer button {
+            z-index: 1060 !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            position: relative !important;
+        }
+
+        /* Make save button more prominent */
+        #addCustomerModal .btn-primary,
+        #editCustomerModal .btn-warning {
+            font-size: 1rem !important;
+            padding: 0.75rem 2rem !important;
+            box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3) !important;
+        }
+
+        /* Make modal body scrollable */
+        #addCustomerModal .modal-body,
+        #editCustomerModal .modal-body {
+            overflow-y: auto !important;
+            max-height: calc(90vh - 140px) !important;
+        }
+
+        /* Make modal content height better */
+        #addCustomerModal .modal-content,
+        #editCustomerModal .modal-content {
+            max-height: 90vh !important;
+        }
+
+        /* Ensure modal dialog is centered and visible */
+        #addCustomerModal .modal-dialog,
+        #editCustomerModal .modal-dialog {
+            margin: 1.75rem auto !important;
+        }
+
+        /* Force modal to show correctly in dark mode */
+        body.theme-dark #addCustomerModal .modal-content,
+        body.theme-dark #editCustomerModal .modal-content {
+            background-color: #111827 !important;
+        }
+
+        body.theme-dark #addCustomerModal .modal-footer,
+        body.theme-dark #editCustomerModal .modal-footer {
+            background-color: #0f1e35 !important;
+            border-top: 1px solid #1e2d45 !important;
+        }
+</style>
+
+
 <div class="container-fluid py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h3 class="fw-bold mb-1"><i class="fas fa-users me-2 text-primary"></i> إدارة العملاء</h3>
             <div class="d-flex align-items-center">
                 <p class="text-muted small mb-0 me-3">إدارة وتعديل حسابات العملاء في شجرة الحسابات</p>
-                <div class="ms-2 px-3 py-1 bg-white border rounded-pill shadow-sm small">
-                    <?php echo get_total_balance_status($total_balance, 'asset', $currency_name); ?>
+                <div class="ms-2 px-3 py-1 bg-success bg-opacity-10 border border-success border-opacity-20 rounded-pill shadow-sm small me-2">
+                    <i class="fas fa-arrow-down me-1 text-success"></i>
+                    إجمالي لنا: <span class="fw-bold text-success"><?php echo number_format($total_debit, 2); ?></span> <?php echo htmlspecialchars($baseCurrency['currency_name'] ?? ''); ?>
+                </div>
+                <div class="ms-2 px-3 py-1 bg-danger bg-opacity-10 border border-danger border-opacity-20 rounded-pill shadow-sm small">
+                    <i class="fas fa-arrow-up me-1 text-danger"></i>
+                    إجمالي علينا: <span class="fw-bold text-danger"><?php echo number_format($total_credit, 2); ?></span> <?php echo htmlspecialchars($baseCurrency['currency_name'] ?? ''); ?>
                 </div>
             </div>
         </div>
@@ -292,8 +424,11 @@ $page_title = "إدارة العملاء";
                 <table class="table table-hover align-middle mb-0 text-center" id="customersTable">
                     <thead class="bg-light text-secondary small text-uppercase fw-bold">
                         <tr>
+                            <th class="px-4 py-3" colspan="8">تفاصيل الحساب المالي</th>
+                        </tr>
+                        <tr>
                             <th class="px-4 py-3">كود الحساب</th>
-                            <th>اسم العميل</th>
+                            <th>اسم الحساب</th>
                             <th>الفرع</th>
                             <th>الرصيد الحالي</th>
                             <th>الحالة</th>
@@ -302,7 +437,7 @@ $page_title = "إدارة العملاء";
                     </thead>
                     <tbody>
                         <?php foreach ($customers as $customer): ?>
-                        <tr>
+                        <tr class="border-top">
                             <td class="px-4">
                                 <code class="text-primary fw-bold"><?php echo $customer['account_code']; ?></code>
                             </td>
@@ -317,19 +452,34 @@ $page_title = "إدارة العملاء";
                             </td>
                             <td>
                                 <?php 
-                                if (isset($balances[$customer['id']])) {
+                                // Display per-currency balances
+                                if (isset($balances[$customer['id']]) && !empty($balances[$customer['id']])) {
                                     foreach ($balances[$customer['id']] as $bal) {
-                                        echo '<div class="mb-1 small">' . format_account_balance($bal['current_balance'], $customer['normal_balance'], $bal['currency_name']) . '</div>';
+                                        echo '<div class="mb-1 small">' . format_account_balance($bal['current_balance'], $bal['normal_balance'], $bal['currency_name']) . '</div>';
                                     }
                                 } else {
-                                    echo '<span class="text-muted small">0.00</span>';
+                                    // If no balance records, show 0.00 in base currency
+                                    echo '<div class="mb-1 small text-muted">0.00 ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                }
+                                
+                                // Display per-customer totals in base currency
+                                $cust_debit = $customer_totals[$customer['id']]['debit'] ?? 0;
+                                $cust_credit = $customer_totals[$customer['id']]['credit'] ?? 0;
+                                if ($cust_debit > 0 || $cust_credit > 0) {
+                                    echo '<hr class="my-2">';
+                                    if ($cust_debit > 0) {
+                                        echo '<div class="small text-success"><i class="fas fa-arrow-down me-1"></i> لنا: ' . number_format($cust_debit, 2) . ' ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                    }
+                                    if ($cust_credit > 0) {
+                                        echo '<div class="small text-danger"><i class="fas fa-arrow-up me-1"></i> علينا: ' . number_format($cust_credit, 2) . ' ' . htmlspecialchars($baseCurrency['currency_name'] ?? '') . '</div>';
+                                    }
                                 }
                                 ?>
                             </td>
                             <td>
                                 <?php echo get_account_status_label($customer['account_status']); ?>
                             </td>
-                            <td>
+                            <td rowspan="1">
                                 <div class="btn-group">
                                     <a href="account_statement.php?id=<?php echo $customer['id']; ?>" class="btn btn-sm btn-light border-0" title="كشف حساب">
                                         <i class="fas fa-file-invoice-dollar text-primary"></i>
@@ -339,18 +489,29 @@ $page_title = "إدارة العملاء";
                                             data-name="<?php echo htmlspecialchars($customer['account_name_ar']); ?>"
                                             data-branch="<?php echo $customer['branch_id']; ?>"
                                             data-status="<?php echo $customer['account_status']; ?>"
+                                            data-phone="<?php echo htmlspecialchars($customer['phone'] ?? ''); ?>"
+                                            data-whatsapp="<?php echo htmlspecialchars($customer['whatsapp'] ?? ''); ?>"
+                                            data-identity_number="<?php echo htmlspecialchars($customer['identity_number'] ?? ''); ?>"
+                                            data-passport_number="<?php echo htmlspecialchars($customer['passport_number'] ?? ''); ?>"
+                                            data-nationality="<?php echo htmlspecialchars($customer['nationality'] ?? ''); ?>"
+                                            data-start_date="<?php echo htmlspecialchars($customer['start_date'] ?? ''); ?>"
+                                            data-address="<?php echo htmlspecialchars($customer['address'] ?? ''); ?>"
+                                            data-notes="<?php echo htmlspecialchars($customer['notes'] ?? ''); ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="customers.php?deactivate=<?php echo $customer['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من تحويل هذا العميل إلى خامل؟')"
-                                       title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></a>
-                                    <a href="customers.php?delete_permanent=<?php echo $customer['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا العميل نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')"
-                                       title="حذف نهائي"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من تحويل هذا العميل إلى خامل؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="deactivate_account" value="<?php echo $customer['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></button>
+                                    </form>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا العميل نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_account_permanent" value="<?php echo $customer['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف نهائي"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
+
                         <?php endforeach; ?>
                     </tbody>
                 </table>
@@ -361,21 +522,47 @@ $page_title = "إدارة العملاء";
 
 <!-- Modal إضافة عميل -->
 <div class="modal fade" id="addCustomerModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg rounded-4 d-flex flex-column">
+            <form method="POST" class="d-flex flex-column h-100">
                 <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white border-0 py-3">
-                    <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة عميل جديد</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body p-4">
-                    <div class="row">
-                        <div class="col-md-12 mb-3">
+            <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة عميل جديد</h5>
+            <div class="d-flex gap-2">
+                <button type="submit" name="add_customer_account" class="btn btn-light text-primary fw-bold">
+                    <i class="fas fa-save me-1"></i> حفظ
+                </button>
+                <button type="button" class="btn-close btn-close-white ms-2" data-bs-dismiss="modal"></button>
+            </div>
+        </div>
+        <div class="modal-body p-4 flex-grow-1 overflow-auto">
+            <div class="row">
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">اسم العميل <span class="text-danger">*</span></label>
                             <input type="text" name="account_name" class="form-control rounded-3" placeholder="مثلاً: محمد أحمد" required>
                         </div>
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الهاتف</label>
+                            <input type="text" name="phone" class="form-control rounded-3" placeholder="مثلاً: +967771234567">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الواتساب</label>
+                            <input type="text" name="whatsapp" class="form-control rounded-3" placeholder="مثلاً: 731234567">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small">الجنسية</label>
+                            <select name="nationality" class="form-select rounded-3">
+                                <option value="">-- اختر الجنسية --</option>
+                                <?php foreach ($nationalities as $nat): ?>
+                                    <option value="<?php echo htmlspecialchars($nat); ?>"><?php echo htmlspecialchars($nat); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small">تاريخ البدء</label>
+                            <input type="date" name="start_date" class="form-control rounded-3">
+                        </div>
+                        <div class="col-md-4 mb-3">
                             <label class="form-label fw-bold small">الفرع المربوط به <span class="text-danger">*</span></label>
                             <select name="branch_id" class="form-select rounded-3" required>
                                 <option value="">-- اختر الفرع --</option>
@@ -383,6 +570,14 @@ $page_title = "إدارة العملاء";
                                     <option value="<?php echo $b['id']; ?>"><?php echo $b['branch_name']; ?></option>
                                 <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">العنوان</label>
+                            <textarea name="address" class="form-control rounded-3" rows="2" placeholder="العنوان التفصيلي"></textarea>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">الملاحظات</label>
+                            <textarea name="notes" class="form-control rounded-3" rows="2" placeholder="ملاحظات إضافية"></textarea>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">العملة</label>
@@ -408,7 +603,7 @@ $page_title = "إدارة العملاء";
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4 bg-light shadow-sm">
+                <div class="modal-footer border-0 p-4 bg-light shadow-sm flex-shrink-0">
                     <button type="button" class="btn btn-white rounded-pill px-4 border" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="add_customer_account" class="btn btn-primary rounded-pill px-5 fw-bold shadow">حفظ العميل</button>
                 </div>
@@ -419,22 +614,48 @@ $page_title = "إدارة العملاء";
 
 <!-- Modal تعديل عميل -->
 <div class="modal fade" id="editCustomerModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg rounded-4 d-flex flex-column">
+            <form method="POST" class="d-flex flex-column h-100">
                 <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header bg-warning text-dark border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل بيانات العميل</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <div class="d-flex gap-2">
+                        <button type="submit" name="update_customer_account" class="btn btn-light text-dark fw-bold">
+                            <i class="fas fa-save me-1"></i> حفظ
+                        </button>
+                        <button type="button" class="btn-close ms-2" data-bs-dismiss="modal"></button>
+                    </div>
                 </div>
-                <div class="modal-body p-4">
+                <div class="modal-body p-4 flex-grow-1 overflow-auto">
                     <div class="row">
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold small">اسم العميل <span class="text-danger">*</span></label>
                             <input type="text" name="account_name" id="edit_name" class="form-control rounded-3" required>
                         </div>
-                        <div class="col-md-12 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الهاتف</label>
+                            <input type="text" name="phone" id="edit_phone" class="form-control rounded-3" placeholder="مثلاً: +967771234567">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold small">رقم الواتساب</label>
+                            <input type="text" name="whatsapp" id="edit_whatsapp" class="form-control rounded-3" placeholder="مثلاً: 731234567">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small">الجنسية</label>
+                            <select name="nationality" id="edit_nationality" class="form-select rounded-3">
+                                <option value="">-- اختر الجنسية --</option>
+                                <?php foreach ($nationalities as $nat): ?>
+                                    <option value="<?php echo htmlspecialchars($nat); ?>"><?php echo htmlspecialchars($nat); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small">تاريخ البدء</label>
+                            <input type="date" name="start_date" id="edit_start_date" class="form-control rounded-3">
+                        </div>
+                        <div class="col-md-4 mb-3">
                             <label class="form-label fw-bold small">الفرع المربوط به</label>
                             <select name="branch_id" id="edit_branch" class="form-select rounded-3">
                                 <option value="">-- عام (بدون فرع) --</option>
@@ -442,6 +663,14 @@ $page_title = "إدارة العملاء";
                                     <option value="<?php echo $b['id']; ?>"><?php echo $b['branch_name']; ?></option>
                                 <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">العنوان</label>
+                            <textarea name="address" id="edit_address" class="form-control rounded-3" rows="2" placeholder="العنوان التفصيلي"></textarea>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label fw-bold small">الملاحظات</label>
+                            <textarea name="notes" id="edit_notes" class="form-control rounded-3" rows="2" placeholder="ملاحظات إضافية"></textarea>
                         </div>
                         <div class="col-md-12 mb-3">
                             <label class="form-label fw-bold small">الحالة</label>
@@ -454,7 +683,7 @@ $page_title = "إدارة العملاء";
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4 bg-light shadow-sm">
+                <div class="modal-footer border-0 p-4 bg-light shadow-sm flex-shrink-0">
                     <button type="button" class="btn btn-white rounded-pill px-4 border" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="update_customer_account" class="btn btn-warning rounded-pill px-5 fw-bold shadow">حفظ التغييرات</button>
                 </div>
@@ -470,11 +699,27 @@ $(document).ready(function() {
         var name = $(this).data('name');
         var branch = $(this).data('branch');
         var status = $(this).data('status');
+        var phone = $(this).data('phone');
+        var whatsapp = $(this).data('whatsapp');
+        var identity_number = $(this).data('identity_number');
+        var passport_number = $(this).data('passport_number');
+        var nationality = $(this).data('nationality');
+        var start_date = $(this).data('start_date');
+        var address = $(this).data('address');
+        var notes = $(this).data('notes');
         
         $('#edit_id').val(id);
         $('#edit_name').val(name);
         $('#edit_branch').val(branch);
         $('#edit_status').val(status);
+        $('#edit_phone').val(phone);
+        $('#edit_whatsapp').val(whatsapp);
+        $('#edit_identity_number').val(identity_number);
+        $('#edit_passport_number').val(passport_number);
+        $('#edit_nationality').val(nationality);
+        $('#edit_start_date').val(start_date);
+        $('#edit_address').val(address);
+        $('#edit_notes').val(notes);
         
         $('#editCustomerModal').modal('show');
     });

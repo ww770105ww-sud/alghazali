@@ -781,8 +781,8 @@ if ($workflow) {
                                 <div class="timeline-dot position-absolute top-0 start-0 translate-middle bg-<?php echo $l['status_color'] ?: 'primary'; ?> rounded-circle" style="width: 12px; height: 12px; left: -1px !important; margin-top: 6px;"></div>
                                 <div class="small fw-bold mb-1 text-<?php echo $l['status_color'] ?: 'primary'; ?>"><?php echo htmlspecialchars($l['status_name']); ?></div>
                                 <div class="extra-small text-muted mb-2"><i class="fas fa-user-edit me-1"></i> <?php echo htmlspecialchars($l['full_name']); ?> | <i class="fas fa-clock me-1"></i> <?php echo date('Y-m-d H:i', strtotime($l['created_at'])); ?></div>
-                                <?php if ($l['notes']): ?>
-                                    <div class="p-2 bg-light rounded-2 extra-small"><?php echo htmlspecialchars($l['notes']); ?></div>
+                                <?php if (isset($l['notes']) && !empty($l['notes'])): ?>
+                                    <div class="p-2 bg-light rounded-2 extra-small"><?php echo htmlspecialchars($l['notes'] ?? ''); ?></div>
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
@@ -935,10 +935,10 @@ if ($workflow) {
                                 </div>
                             </div>
                         </div>
-                        <?php if ($sale_inv['notes']): ?>
+                        <?php if (isset($sale_inv['notes']) && !empty($sale_inv['notes'])): ?>
                             <div class="p-3 bg-light rounded-3">
                                 <small class="text-muted d-block mb-1">ملاحظات:</small>
-                                <?php echo htmlspecialchars($sale_inv['notes']); ?>
+                                <?php echo htmlspecialchars($sale_inv['notes'] ?? ''); ?>
                             </div>
                         <?php endif; ?>
                     <?php else: ?>
@@ -981,10 +981,10 @@ if ($workflow) {
                                 <span class="fw-bold"><?php echo $pur_inv['branch_name']; ?></span>
                             </div>
                         </div>
-                        <?php if ($pur_inv['notes']): ?>
+                        <?php if (isset($pur_inv['notes']) && !empty($pur_inv['notes'])): ?>
                             <div class="p-3 bg-light rounded-3">
                                 <small class="text-muted d-block mb-1">ملاحظات:</small>
-                                <?php echo htmlspecialchars($pur_inv['notes']); ?>
+                                <?php echo htmlspecialchars($pur_inv['notes'] ?? ''); ?>
                             </div>
                         <?php endif; ?>
                     <?php else: ?>

@@ -3,6 +3,58 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 require_once '../includes/db.php';
 require_once '../includes/functions.php';
+require_once '../includes/tafqeet.php';
+
+// Add Umrah field permissions if they don't exist
+try {
+    $permissions = [
+        [
+            'permission_code' => 'umrah_show_supplier',
+            'display_name' => 'إظهار حقل المورد (جهة التكلفة)',
+            'category' => 'umrah',
+            'is_active' => 1,
+            'description' => 'إظهار حقل المورد في نموذج العمرة'
+        ],
+        [
+            'permission_code' => 'umrah_show_cost_currency',
+            'display_name' => 'إظهار حقل عملة التكلفة (المورد)',
+            'category' => 'umrah',
+            'is_active' => 1,
+            'description' => 'إظهار حقل عملة التكلفة في نموذج العمرة'
+        ],
+        [
+            'permission_code' => 'umrah_show_cost_amount',
+            'display_name' => 'إظهار حقل سعر التكلفة',
+            'category' => 'umrah',
+            'is_active' => 1,
+            'description' => 'إظهار حقل سعر التكلفة في نموذج العمرة'
+        ],
+        [
+            'permission_code' => 'umrah_show_discount',
+            'display_name' => 'إظهار حقل مبلغ الخصم',
+            'category' => 'umrah',
+            'is_active' => 1,
+            'description' => 'إظهار حقل مبلغ الخصم في نموذج العمرة'
+        ]
+    ];
+    
+    foreach ($permissions as $perm) {
+        $stmt = $pdo->prepare("SELECT id FROM unified_permissions WHERE permission_code = ?");
+        $stmt->execute([$perm['permission_code']]);
+        if (!$stmt->fetch()) {
+            $insertStmt = $pdo->prepare("INSERT INTO unified_permissions (permission_code, display_name, category, is_active, description) VALUES (?, ?, ?, ?, ?)");
+            $insertStmt->execute([
+                $perm['permission_code'],
+                $perm['display_name'],
+                $perm['category'],
+                $perm['is_active'],
+                $perm['description']
+            ]);
+        }
+    }
+} catch (Exception $e) {
+    // Ignore errors (permissions might already exist, etc.)
+}
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -25,7 +77,7 @@ if (!has_permission($permission_prefix . '_view')) {
 $settings = getSettings($pdo);
 $umrah_settings = $settings;
 
-if (!$umrah_settings['enable_umrah'] && $_SESSION['role'] !== 'developer') {
+if (!get_module_status($pdo, 'enable_umrah') && $_SESSION['role'] !== 'developer') {
     die("<div style='text-align:center; padding:50px; font-family:Tahoma;'><h3>عذراً، قسم العمرة معطل حالياً من قبل الإدارة.</h3><a href='index.php'>العودة للرئيسية</a></div>");
 }
 
@@ -33,6 +85,10 @@ if (!$umrah_settings['enable_umrah'] && $_SESSION['role'] !== 'developer') {
 $stmt_user = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmt_user->execute([$_SESSION['admin_id']]);
 $currentUser = $stmt_user->fetch();
+
+$umrah_service_name = 'خدمات العمرة';
+$umrah_service_aliases = get_umrah_service_aliases();
+$umrah_invoice_source_types_sql = "'" . implode("', '", array_map('addslashes', $umrah_service_aliases)) . "'";
 
 // نظام العزل والفلترة
 $entity_filter = get_entity_filter('p', 'branch_id', 'agent_id', null, null);
@@ -72,7 +128,9 @@ try {
 if ($has_new_columns) {
     $sql = "
     SELECT p.*, s.status_name, s.status_color, ser.service_name,
-           br.branch_name, ag.agent_name, c.currency_name, c.currency_symbol,
+           br.branch_name, ag.agent_name,
+           c_sale.currency_name as sale_currency_name, c_sale.currency_symbol as sale_currency_symbol,
+           c_pur.currency_name as pur_currency_name, c_pur.currency_symbol as pur_currency_symbol,
            h.host_name, g.guarantor_name,
            w.name as workflow_name,
            ws.step_name as current_workflow_step,
@@ -129,6 +187,8 @@ if ($has_new_columns) {
            ) as purchase_paid,
            sup.supplier_name,
            ua_inv.account_name_ar as cashbox_name,
+           ua_inv.account_code as invoice_account_code,
+           ua_inv.account_name_ar as invoice_account_name_ar,
            COALESCE(cust.full_name, ag.agent_name, ua_ag.account_name_ar, ua_br.account_name_ar, br.branch_name, '---') as account_display_name
     FROM passports p
     LEFT JOIN statuses s ON p.status_id = s.id
@@ -145,14 +205,15 @@ if ($has_new_columns) {
     LEFT JOIN invoices inv ON (
         inv.id = p.sales_invoice_id 
         OR inv.id = p.invoice_id 
-        OR (inv.source_type = 'حج وعمرة' AND inv.source_id = p.id AND inv.invoice_category = 'sales')
+        OR (inv.source_type IN ($umrah_invoice_source_types_sql) AND inv.source_id = p.id AND inv.invoice_category = 'sales')
     )
-    LEFT JOIN currencies c ON inv.currency_id = c.id
+    LEFT JOIN currencies c_sale ON inv.currency_id = c_sale.id
     LEFT JOIN unified_accounts ua_inv ON inv.account_id = ua_inv.id
     LEFT JOIN invoices pur ON (
         pur.id = p.purchase_invoice_id 
-        OR (pur.source_type = 'حج وعمرة' AND pur.source_id = p.id AND pur.invoice_category = 'purchase')
+        OR (pur.source_type IN ($umrah_invoice_source_types_sql) AND pur.source_id = p.id AND pur.invoice_category = 'purchase')
     )
+    LEFT JOIN currencies c_pur ON pur.currency_id = c_pur.id
     LEFT JOIN suppliers sup ON (inv.supplier_id = sup.id OR pur.supplier_id = sup.id)
     $where_sql
     GROUP BY p.id
@@ -161,7 +222,9 @@ if ($has_new_columns) {
 } else {
     $sql = "
     SELECT p.*, s.status_name, s.status_color, ser.service_name,
-           br.branch_name, ag.agent_name, c.currency_name, c.currency_symbol,
+           br.branch_name, ag.agent_name,
+           c_sale.currency_name as sale_currency_name, c_sale.currency_symbol as sale_currency_symbol,
+           c_pur.currency_name as pur_currency_name, c_pur.currency_symbol as pur_currency_symbol,
            h.host_name, g.guarantor_name,
            w.name as workflow_name,
            ws.step_name as current_workflow_step,
@@ -218,6 +281,8 @@ if ($has_new_columns) {
            ) as purchase_paid,
            sup.supplier_name,
            ua_inv.account_name_ar as cashbox_name,
+           ua_inv.account_code as invoice_account_code,
+           ua_inv.account_name_ar as invoice_account_name_ar,
            COALESCE(cust.full_name, ag.agent_name, ua_ag.account_name_ar, ua_br.account_name_ar, br.branch_name, '---') as account_display_name
     FROM passports p
     LEFT JOIN statuses s ON p.status_id = s.id
@@ -232,9 +297,10 @@ if ($has_new_columns) {
     LEFT JOIN workflows w ON p.workflow_id = w.id
     LEFT JOIN workflow_steps ws ON (ws.workflow_id = p.workflow_id AND ws.status_id = p.status_id)
     LEFT JOIN invoices inv ON p.invoice_id = inv.id
-    LEFT JOIN currencies c ON inv.currency_id = c.id
+    LEFT JOIN currencies c_sale ON inv.currency_id = c_sale.id
     LEFT JOIN unified_accounts ua_inv ON inv.account_id = ua_inv.id
-    LEFT JOIN invoices pur ON (pur.source_type = 'حج وعمرة' AND pur.source_id = p.id AND pur.invoice_category = 'purchase')
+    LEFT JOIN invoices pur ON (pur.source_type IN ($umrah_invoice_source_types_sql) AND pur.source_id = p.id AND pur.invoice_category = 'purchase')
+    LEFT JOIN currencies c_pur ON pur.currency_id = c_pur.id
     LEFT JOIN suppliers sup ON (inv.supplier_id = sup.id OR pur.supplier_id = sup.id)
     $where_sql
     GROUP BY p.id
@@ -252,10 +318,19 @@ $umrah_workflows = get_all_workflows_for_transaction('umrah', $currentUser['bran
 $statuses = $pdo->query("SELECT * FROM statuses")->fetchAll();
 $services = $pdo->query("SELECT id, service_name FROM services WHERE status = 'active' ORDER BY service_name ASC")->fetchAll();
 
-// Get service id for "حج وعمرة"
-$umrah_service = $pdo->prepare("SELECT id FROM services WHERE service_name = ? LIMIT 1");
-$umrah_service->execute(['حج وعمرة']);
-$umrah_service_id = $umrah_service->fetchColumn();
+// ربط نموذج العمرة بخدمة واحدة فقط: خدمات العمرة
+$umrah_service_id = resolve_service_id($pdo, $umrah_service_name);
+if (!$umrah_service_id) {
+    foreach ($umrah_service_aliases as $service_alias) {
+        if ($service_alias === $umrah_service_name) {
+            continue;
+        }
+        $umrah_service_id = resolve_service_id($pdo, $service_alias);
+        if ($umrah_service_id) {
+            break;
+        }
+    }
+}
 
 // Fetch service prices for this service
 $umrah_service_prices = [];
@@ -344,7 +419,13 @@ function get_accounts_under_parent($pdo, $parent_account_code, $entity_type = nu
     $stmt->execute([$parent_id]);
     $accounts = [];
     while ($row = $stmt->fetch()) {
-        $row['display_name'] = $row['account_code'] . ' - ' . $row['account_name_ar'];
+        $display_name = $row['account_code'] . ' - ' . $row['account_name_ar'];
+        if ($entity_type === 'customer' && empty($row['customer_id'])) {
+            $display_name .= ' (legacy غير مربوط)';
+        } elseif ($entity_type === 'agent' && empty($row['agent_id'])) {
+            $display_name .= ' (legacy غير مربوط)';
+        }
+        $row['display_name'] = $display_name;
         $row['name'] = $row['account_name_ar'];
         $accounts[] = $row;
     }
@@ -420,22 +501,47 @@ require_once 'header.php';
     </div>
 
     <!-- تنبيهات النجاح والخطأ -->
-    <?php if (isset($_GET['posted'])): ?>
-        <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm rounded-4 mb-4" role="alert">
-            <i class="fas fa-check-circle me-2"></i> تم ترحيل الفاتورة بنجاح محاسبياً.
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-    <?php endif; ?>
-    <?php if (isset($_GET['reset'])): ?>
-        <div class="alert alert-info alert-dismissible fade show border-0 shadow-sm rounded-4 mb-4" role="alert">
-            <i class="fas fa-info-circle me-2"></i> تم إلغاء الترحيل وإعادة الفاتورة لمسودة.
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-    <?php endif; ?>
-    <?php if (isset($_GET['deleted'])): ?>
-        <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm rounded-4 mb-4" role="alert">
-            <i class="fas fa-trash-alt me-2"></i> تم حذف الفاتورة بنجاح.
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    <?php
+    $page_alerts = [];
+    if (isset($_GET['posted'])) {
+        $page_alerts[] = [
+            'type' => 'success',
+            'icon' => 'fa-check-circle',
+            'title' => 'تم الترحيل بنجاح',
+            'message' => 'تم ترحيل الفاتورة بنجاح محاسبياً.'
+        ];
+    }
+    if (isset($_GET['reset'])) {
+        $page_alerts[] = [
+            'type' => 'info',
+            'icon' => 'fa-rotate-left',
+            'title' => 'تمت الإعادة إلى المسودة',
+            'message' => 'تم إلغاء الترحيل وإعادة الفاتورة إلى حالة المسودة.'
+        ];
+    }
+    if (isset($_GET['deleted'])) {
+        $page_alerts[] = [
+            'type' => 'warning',
+            'icon' => 'fa-trash-alt',
+            'title' => 'تم الحذف بنجاح',
+            'message' => 'تم حذف الفاتورة والبيانات المرتبطة بها بنجاح.'
+        ];
+    }
+    ?>
+    <?php if (!empty($page_alerts)): ?>
+        <div class="umrah-alert-stack mb-4">
+            <?php foreach ($page_alerts as $alert): ?>
+                <div class="umrah-page-alert umrah-page-alert-<?php echo htmlspecialchars($alert['type']); ?> alert alert-dismissible fade show border-0 shadow-sm rounded-4" role="alert">
+                    <div class="umrah-page-alert-icon">
+                        <i class="fas <?php echo htmlspecialchars($alert['icon']); ?>"></i>
+                    </div>
+                    <div class="umrah-page-alert-content">
+                        <div class="umrah-page-alert-title"><?php echo htmlspecialchars($alert['title']); ?></div>
+                        <div class="umrah-page-alert-text"><?php echo htmlspecialchars($alert['message']); ?></div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endforeach; ?>
         </div>
     <?php endif; ?>
 
@@ -474,6 +580,78 @@ require_once 'header.php';
                 </select>
             </div>
         </div>
+        <style>
+            .clamp-2 {
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
+            .finance-mini-card {
+                border-radius: 18px;
+                padding: 0.75rem 0.85rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                background: rgba(248, 250, 252, 0.86);
+                min-width: 165px;
+            }
+
+            body.theme-dark .finance-mini-card {
+                background: rgba(30, 41, 59, 0.85);
+                border-color: rgba(148, 163, 184, 0.12);
+            }
+
+            .finance-mini-card .mini-label {
+                font-size: 0.72rem;
+                color: var(--text-muted);
+                margin-bottom: 0.18rem;
+            }
+
+            .finance-mini-card .mini-name {
+                font-size: 0.9rem;
+                font-weight: 800;
+                color: var(--text-bold);
+                line-height: 1.5;
+                margin-bottom: 0.45rem;
+            }
+
+            .finance-mini-card .mini-amount {
+                font-size: 1.02rem;
+                font-weight: 900;
+                color: #2563eb;
+            }
+
+            .payment-stack {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.5rem;
+                min-width: 160px;
+            }
+
+            @media (max-width: 1200px) {
+                .payment-stack {
+                    grid-template-columns: 1fr;
+                }
+            }
+
+            .payment-box {
+                border-radius: 16px;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                background: rgba(248, 250, 252, 0.78);
+                padding: 0.65rem 0.75rem;
+            }
+
+            body.theme-dark .payment-box {
+                background: rgba(30, 41, 59, 0.78);
+                border-color: rgba(148, 163, 184, 0.12);
+            }
+
+            .payment-box-title {
+                font-size: 0.75rem;
+                font-weight: 800;
+                margin-bottom: 0.35rem;
+            }
+        </style>
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0 text-center">
@@ -481,11 +659,10 @@ require_once 'header.php';
                         <tr>
                             <th class="px-4 py-3">المعاملة / الاسم</th>
                             <th>الجواز</th>
-                            <th>الفرع / الوكيل</th>
-                            <th>الحالة</th>
                             <th>التأشيرة / التنبيه</th>
-                            <th class="text-center">فاتورة البيع</th>
-                            <th class="text-center">فاتورة الشراء</th>
+                            <th class="text-center">المورد والشراء</th>
+                            <th class="text-center">الحساب والبيع</th>
+                            <th class="text-center">حالة الدفع والترحيل</th>
                             <th class="text-center">الإجراءات</th>
                         </tr>
                     </thead>
@@ -497,20 +674,11 @@ require_once 'header.php';
                                 </td>
                                 <td>
                                     <span class="badge bg-light text-dark border px-2 py-1 font-monospace"><?php echo htmlspecialchars($p['passport_number']); ?></span>
-                                </td>
-                                <td>
-                                    <div class="small fw-bold"><?php echo htmlspecialchars($p['account_display_name']); ?></div>
-                                    <?php if ($p['cashbox_name']): ?>
-                                        <div class="extra-small text-muted mt-1">
-                                            <i class="fas fa-cash-register me-1"></i>
-                                            <?php echo htmlspecialchars($p['cashbox_name']); ?>
-                                        </div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge rounded-pill px-3 py-2 mb-1 shadow-sm" style="background-color: <?php echo htmlspecialchars($p['status_color']); ?>; color: #fff;">
-                                        <?php echo htmlspecialchars($p['status_name']); ?>
-                                    </span>
+                                    <div class="mt-2">
+                                        <span class="badge rounded-pill px-3 py-2 mb-1 shadow-sm" style="background-color: <?php echo htmlspecialchars($p['status_color']); ?>; color: #fff;">
+                                            <?php echo htmlspecialchars($p['status_name']); ?>
+                                        </span>
+                                    </div>
                                 </td>
                                 <td>
                                     <?php if ($p['visa_number']): ?>
@@ -545,83 +713,113 @@ require_once 'header.php';
                                         <span class="text-muted small opacity-50"><i class="fas fa-hourglass-start me-1"></i> بانتظار التأشيرة</span>
                                     <?php endif; ?>
                                 </td>
-                                <!-- فاتورة البيع -->
-                                <td class="text-center">
-                                    <?php if ($p['sales_invoice_id']): ?>
-                                        <div class="p-2 bg-primary-subtle rounded-3 border border-primary-subtle">
-                                            <div class="fw-bold text-dark mb-2">
-                                                <?php echo number_format($p['sales_amount'] - $p['sales_discount'], 2); ?>
-                                                <small class="text-muted"><?php echo htmlspecialchars($p['currency_symbol']); ?></small>
-                                            </div>
-                                            <div class="d-flex flex-wrap gap-1 justify-content-center">
-                                                <?php if ($p['sales_status'] == 'posted'): ?>
-                                                    <span class="badge bg-success text-white rounded-pill px-2 py-1 small">مرحل</span>
-                                                <?php else: ?>
-                                                    <span class="badge bg-warning text-dark rounded-pill px-2 py-1 small">مسودة</span>
-                                                <?php endif; ?>
-
-                                                <?php
-                                                $net = (float)$p['sales_amount'] - (float)$p['sales_discount'];
-                                                $paid = (float)$p['sales_received'];
-                                                if ($paid >= $net - 0.01 && $net > 0): ?>
-                                                    <span class="badge bg-success text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-check-circle me-1"></i> مكتمل
-                                                    </span>
-                                                <?php elseif ($paid > 0): ?>
-                                                    <span class="badge bg-info text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-exclamation-circle me-1"></i> جزئي
-                                                    </span>
-                                                <?php else: ?>
-                                                    <span class="badge bg-danger text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-times-circle me-1"></i> غير مدفوع
-                                                    </span>
-                                                <?php endif; ?>
-                                            </div>
+                                <td class="small text-start">
+                                    <div class="finance-mini-card">
+                                        <div class="mini-label">المورد</div>
+                                        <div class="mini-name clamp-2"><?php echo htmlspecialchars(($p['supplier_name'] ?? '') !== '' ? $p['supplier_name'] : '---'); ?></div>
+                                        <div class="mini-label">سعر الشراء</div>
+                                        <div class="mini-amount" style="color:#dc2626;">
+                                            <?php
+                                            $purchaseAmount = $p['purchase_invoice_id'] ? (float)($p['purchase_amount'] ?? 0) : 0;
+                                            $purCurrencyMark = trim((string)($p['pur_currency_symbol'] ?? ($p['pur_currency_name'] ?? '')));
+                                            echo $p['purchase_invoice_id'] ? number_format($purchaseAmount, 2) : '---';
+                                            echo $purCurrencyMark !== '' && $p['purchase_invoice_id'] ? ' ' . htmlspecialchars($purCurrencyMark) : '';
+                                            ?>
                                         </div>
-                                    <?php else: ?>
-                                        <span class="text-muted small opacity-50">---</span>
-                                    <?php endif; ?>
+                                    </div>
                                 </td>
-
-                                <!-- فاتورة الشراء -->
-                                <td class="text-center">
-                                    <?php if ($p['purchase_invoice_id']): ?>
-                                        <div class="p-2 bg-warning-subtle rounded-3 border border-warning-subtle">
-                                            <div class="fw-bold text-dark mb-2">
-                                                <?php echo number_format($p['purchase_amount'], 2); ?>
-                                                <small class="text-muted"><?php echo htmlspecialchars($p['currency_symbol']); ?></small>
-                                            </div>
-                                            <div class="d-flex flex-wrap gap-1 justify-content-center">
-                                                <?php if ($p['purchase_status'] == 'posted'): ?>
-                                                    <span class="badge bg-success text-white rounded-pill px-2 py-1 small">مرحل</span>
-                                                <?php else: ?>
-                                                    <span class="badge bg-warning text-dark rounded-pill px-2 py-1 small">مسودة</span>
-                                                <?php endif; ?>
-
-                                                <?php
-                                                $p_net = (float)$p['purchase_amount'];
-                                                $p_paid = (float)$p['purchase_paid'];
-                                                if ($p_paid >= $p_net - 0.01 && $p_net > 0): ?>
-                                                    <span class="badge bg-success text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-check-circle me-1"></i> مكتمل
-                                                    </span>
-                                                <?php elseif ($p_paid > 0): ?>
-                                                    <span class="badge bg-info text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-exclamation-circle me-1"></i> جزئي
-                                                    </span>
-                                                <?php else: ?>
-                                                    <span class="badge bg-danger text-white rounded-pill px-2 py-1 small">
-                                                        <i class="fas fa-times-circle me-1"></i> غير مسدد
-                                                    </span>
-                                                <?php endif; ?>
-                                            </div>
+                                <td class="small text-start">
+                                    <?php
+                                    $impactedCode = trim((string)($p['invoice_account_code'] ?? ''));
+                                    $impactedName = trim((string)($p['invoice_account_name_ar'] ?? ''));
+                                    $impactedDisplay = $impactedName !== '' ? $impactedName : '---';
+                                    ?>
+                                    <div class="finance-mini-card">
+                                        <div class="mini-label">الحساب المتأثر</div>
+                                        <div class="mini-name clamp-2"><?php echo htmlspecialchars($impactedDisplay); ?></div>
+                                        <div class="mini-label">سعر البيع</div>
+                                        <div class="mini-amount" style="color:#16a34a;">
+                                            <?php
+                                            $saleAmount = $p['sales_invoice_id'] ? ((float)($p['sales_amount'] ?? 0) - (float)($p['sales_discount'] ?? 0)) : 0;
+                                            $saleCurrencyName = trim((string)($p['sale_currency_name'] ?? ''));
+                                            echo $p['sales_invoice_id'] ? number_format($saleAmount, 2) : '---';
+                                            echo $saleCurrencyName !== '' && $p['sales_invoice_id'] ? ' ' . htmlspecialchars($saleCurrencyName) : '';
+                                            ?>
                                         </div>
-                                    <?php else: ?>
-                                        <span class="text-muted small opacity-50">---</span>
-                                    <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td class="text-start">
+                                    <?php
+                                    $pay_badges = [
+                                        'unpaid' => '<span class="badge bg-danger-subtle text-danger rounded-pill">غير مدفوع</span>',
+                                        'partial' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
+                                        'partially_paid' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
+                                        'fully_paid' => '<span class="badge bg-success-subtle text-success rounded-pill">مدفوع بالكامل</span>',
+                                        'awaiting_approval' => '<span class="badge bg-info-subtle text-info rounded-pill">بانتظار الاعتماد</span>',
+                                        'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل مالياً</span>'
+                                    ];
+                                    $invoice_badges = [
+                                        'draft' => '<span class="badge bg-secondary-subtle text-secondary rounded-pill">مسودة</span>',
+                                        'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل</span>',
+                                        'cancelled' => '<span class="badge bg-danger-subtle text-danger rounded-pill">ملغي</span>'
+                                    ];
+
+                                    $salesNet = (float)($p['sales_amount'] ?? 0) - (float)($p['sales_discount'] ?? 0);
+                                    $salesPaid = (float)($p['sales_received'] ?? 0);
+                                    $salesPayKey = ($salesNet > 0 && $salesPaid >= $salesNet - 0.01) ? 'fully_paid' : ($salesPaid > 0 ? 'partial' : 'unpaid');
+
+                                    $purNet = (float)($p['purchase_amount'] ?? 0);
+                                    $purPaid = (float)($p['purchase_paid'] ?? 0);
+                                    $purPayKey = ($purNet > 0 && $purPaid >= $purNet - 0.01) ? 'fully_paid' : ($purPaid > 0 ? 'partial' : 'unpaid');
+                                    ?>
+                                    <div class="payment-stack">
+                                        <div class="payment-box small">
+                                            <div class="payment-box-title text-success">البيع</div>
+                                            <div class="d-flex flex-wrap gap-1 mb-1">
+                                            <?php echo $pay_badges[$salesPayKey] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                            <?php echo $invoice_badges[$p['sales_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                            </div>
+                                            <?php if ($p['sales_invoice_id']): ?>
+                                                <div class="mini-label">المتبقي</div>
+                                                <div class="mini-amount" style="color:#dc2626;">
+                                                    <?php
+                                                    $salesRemaining = max(0, $salesNet - $salesPaid);
+                                                    $saleCurrencyMark = trim((string)($p['sale_currency_symbol'] ?? ($p['sale_currency_name'] ?? '')));
+                                                    echo number_format($salesRemaining, 2);
+                                                    echo $saleCurrencyMark !== '' ? ' ' . htmlspecialchars($saleCurrencyMark) : '';
+                                                    ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="payment-box small">
+                                            <div class="payment-box-title text-primary">الشراء</div>
+                                            <div class="d-flex flex-wrap gap-1 mb-1">
+                                            <?php echo !empty($p['purchase_invoice_id']) ? ($pay_badges[$purPayKey] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : '<span class="badge bg-light text-dark rounded-pill">لا توجد</span>'; ?>
+                                            <?php echo !empty($p['purchase_invoice_id']) ? ($invoice_badges[$p['purchase_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : ''; ?>
+                                            </div>
+                                            <?php if ($p['purchase_invoice_id']): ?>
+                                                <div class="mini-label">المتبقي</div>
+                                                <div class="mini-amount" style="color:#dc2626;">
+                                                    <?php
+                                                    $purRemaining = max(0, $purNet - $purPaid);
+                                                    $purCurrencyMark = trim((string)($p['pur_currency_symbol'] ?? ($p['pur_currency_name'] ?? '')));
+                                                    echo number_format($purRemaining, 2);
+                                                    echo $purCurrencyMark !== '' ? ' ' . htmlspecialchars($purCurrencyMark) : '';
+                                                    ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
                                 </td>
                                 <td>
                                     <div class="btn-group">
+                                        <!-- عرض التفاصيل - تبويب سير العمل مباشرة -->
+                                        <button class="btn btn-sm bg-indigo text-white shadow-sm view-umrah" data-id="<?php echo $p['id']; ?>" data-tab="workflow" title="سير العمل والمراحل" style="background-color:#6366f1 !important;">
+                                            <i class="fas fa-tasks"></i>
+                                            <?php if (!empty($p['current_workflow_step'])): ?>
+                                                <span class="badge rounded-pill ms-1 d-none d-md-inline" style="background-color:<?php echo htmlspecialchars($p['current_workflow_color'] ?? '#6c757d'); ?>;color:#fff;font-size:0.65rem;"><?php echo htmlspecialchars(mb_substr($p['current_workflow_step'], 0, 8)); ?></span>
+                                            <?php endif; ?>
+                                        </button>
                                         <!-- عرض التفاصيل -->
                                         <button class="btn btn-sm btn-info text-white shadow-sm view-umrah" data-id="<?php echo $p['id']; ?>" data-tab="info" title="التفاصيل"><i class="fas fa-eye"></i></button>
 
@@ -640,16 +838,42 @@ require_once 'header.php';
                                                         <h6 class="dropdown-header small fw-bold">ترحيل محاسبياً (Post)</h6>
                                                     </li>
                                                     <?php if ($p['sales_invoice_id'] && $p['sales_status'] == 'draft' && $p['purchase_invoice_id'] && $p['purchase_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?post_all=<?php echo $p['sales_invoice_id']; ?>&return_to=umrah.php" onclick="return confirm('ترحيل البيع والشراء معاً؟')"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد الترحيل المالي" data-confirm-text="هل تريد ترحيل البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="post_scope" value="all">
+                                                                <input type="hidden" name="linked_invoice_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</button>
+                                                            </form>
+                                                        </li>
                                                         <li>
                                                             <hr class="dropdown-divider">
                                                         </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['sales_invoice_id'] && $p['sales_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $p['sales_invoice_id']; ?>&return_to=umrah.php" onclick="return confirm('ترحيل فاتورة البيع؟')"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة البيع" data-confirm-text="هل تريد ترحيل فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['purchase_invoice_id'] && $p['purchase_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $p['purchase_invoice_id']; ?>&return_to=umrah.php" onclick="return confirm('ترحيل فاتورة الشراء؟')"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة الشراء" data-confirm-text="هل تريد ترحيل فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="post_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
                                                 </ul>
                                             </div>
@@ -666,16 +890,44 @@ require_once 'header.php';
                                                         <h6 class="dropdown-header small fw-bold">خيارات الحذف</h6>
                                                     </li>
                                                     <?php if ($p['sales_invoice_id'] && $p['purchase_invoice_id'] && $p['sales_status'] == 'draft' && $p['purchase_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small text-danger" href="invoices.php?delete_invoice=<?php echo $p['sales_invoice_id']; ?>&delete_both=<?php echo $p['purchase_invoice_id']; ?>&return_to=umrah.php" onclick="return confirm('حذف فاتورة البيع والشراء معاً؟')"><i class="fas fa-trash-alt me-2"></i>حذف الكل (الفواتير)</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف الفواتير" data-confirm-text="هل تريد حذف فاتورة البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="delete_scope" value="both">
+                                                                <input type="hidden" name="linked_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small text-danger"><i class="fas fa-trash-alt me-2"></i>حذف الكل (الفواتير)</button>
+                                                            </form>
+                                                        </li>
                                                         <li>
                                                             <hr class="dropdown-divider">
                                                         </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['sales_invoice_id'] && $p['sales_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $p['sales_invoice_id']; ?>&confirm_linked=1&return_to=umrah.php" onclick="return confirm('حذف فاتورة البيع؟')"><i class="fas fa-trash me-2 text-primary"></i>حذف فاتورة البيع</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة البيع" data-confirm-text="هل تريد حذف فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="delete_scope" value="self">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2 text-primary"></i>حذف فاتورة البيع</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['purchase_invoice_id'] && $p['purchase_status'] == 'draft'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $p['purchase_invoice_id']; ?>&confirm_linked=1&return_to=umrah.php" onclick="return confirm('حذف فاتورة الشراء؟')"><i class="fas fa-trash me-2 text-warning"></i>حذف فاتورة الشراء</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة الشراء" data-confirm-text="هل تريد حذف فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="delete_scope" value="self">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2 text-warning"></i>حذف فاتورة الشراء</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
 
                                                     <?php if (has_permission('umrah_delete') && !$is_any_posted): ?>
@@ -688,7 +940,7 @@ require_once 'header.php';
                                             </div>
                                         <?php endif; ?>
 
-                                        <?php if (has_permission('umrah_edit')): ?>
+                                        <?php if (has_permission('umrah_edit') && !$is_any_posted): ?>
                                             <button class="btn btn-sm btn-warning text-dark shadow-sm edit-umrah" data-id="<?php echo $p['id']; ?>" title="تعديل"><i class="fas fa-edit"></i></button>
                                         <?php endif; ?>
 
@@ -703,16 +955,44 @@ require_once 'header.php';
                                                         <h6 class="dropdown-header small fw-bold">إعادة التعيين إلى مسودة (Reset)</h6>
                                                     </li>
                                                     <?php if ($p['sales_status'] == 'posted' && $p['purchase_status'] == 'posted'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $p['sales_invoice_id']; ?>&reset_type=all&return_to=umrah.php" onclick="return confirm('إلغاء ترحيل البيع والشراء معاً؟')"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء الترحيل" data-confirm-text="هل تريد إلغاء ترحيل البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="reset_type" value="all">
+                                                                <input type="hidden" name="linked_invoice_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</button>
+                                                            </form>
+                                                        </li>
                                                         <li>
                                                             <hr class="dropdown-divider">
                                                         </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['sales_status'] == 'posted'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $p['sales_invoice_id']; ?>&reset_type=sales&return_to=umrah.php" onclick="return confirm('إلغاء ترحيل فاتورة البيع؟')"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل البيع" data-confirm-text="هل تريد إلغاء ترحيل فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['sales_invoice_id']; ?>">
+                                                                <input type="hidden" name="reset_type" value="sales">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
                                                     <?php if ($p['purchase_status'] == 'posted'): ?>
-                                                        <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $p['purchase_invoice_id']; ?>&reset_type=purchase&return_to=umrah.php" onclick="return confirm('إلغاء ترحيل فاتورة الشراء؟')"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</a></li>
+                                                        <li>
+                                                            <form method="post" action="invoices.php" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل الشراء" data-confirm-text="هل تريد إلغاء ترحيل فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                                <?php echo csrf_input(); ?>
+                                                                <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                                <input type="hidden" name="invoice_id" value="<?php echo $p['purchase_invoice_id']; ?>">
+                                                                <input type="hidden" name="reset_type" value="purchase">
+                                                                <input type="hidden" name="return_to" value="umrah.php">
+                                                                <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</button>
+                                                            </form>
+                                                        </li>
                                                     <?php endif; ?>
                                                 </ul>
                                             </div>
@@ -749,17 +1029,17 @@ require_once 'header.php';
                     <div class="alert alert-custom-info py-2 px-3 mb-2 d-flex align-items-center">
                         <i class="fas fa-info-circle fa-lg me-2"></i>
                         <div>
-                            <h6 class="fw-bold mb-0" style="font-size: 0.8rem;">نوع الخدمة: حج وعمرة</h6>
+                            <h6 class="fw-bold mb-0" style="font-size: 0.8rem;">نوع الخدمة: <?php echo htmlspecialchars($umrah_service_name); ?></h6>
                         </div>
                     </div>
 
                     <input type="hidden" name="customer_id" id="customer_id_hidden">
                     <input type="hidden" name="agent_id" id="agent_id_hidden">
-                    <input type="hidden" name="service_id" value="4">
+                    <input type="hidden" name="service_id" value="<?php echo (int)$umrah_service_id; ?>">
 
                     <div class="row g-4">
-                        <!-- الأعمدة اليسرى: بيانات المعتمر والمستضيف والضمان -->
-                        <div class="col-lg-6">
+                        <!-- All sections in single column -->
+                        <div class="col-12">
                             <!-- القسم 1: بيانات المعتمر والجواز -->
                             <div class="form-section-card mb-4">
                                 <div class="form-section-header">
@@ -768,33 +1048,28 @@ require_once 'header.php';
                                 </div>
                                 <div class="form-section-body">
                                     <div class="row g-3">
-                                        <div class="col-md-6">
+                                        <div class="col-md-4">
                                             <label class="form-label">قراءة الجواز (OCR)</label>
                                             <div class="input-group">
                                                 <input type="file" name="passport_image" id="passportOCR" class="form-control" accept="image/*">
                                                 <button class="btn btn-primary btn-sm" type="button" id="scan_passport_btn"><i class="fas fa-qrcode"></i></button>
                                             </div>
                                         </div>
-                                        <div class="col-md-6">
+                                        <div class="col-md-4">
                                             <label class="form-label">رقم الجواز</label>
                                             <input type="text" name="passport_number" id="ocr_passport" class="form-control font-monospace" required>
                                         </div>
-                                        <div class="col-md-6">
+                                        <div class="col-md-4">
+                                            <label class="form-label">رقم التواصل</label>
+                                            <input type="text" name="phone_number" class="form-control" placeholder="00966...">
+                                        </div>
+                                        <div class="col-md-4">
                                             <label class="form-label">الاسم (عربي)</label>
                                             <input type="text" name="full_name" id="ocr_name" class="form-control" required>
                                         </div>
-                                        <div class="col-md-6">
+                                        <div class="col-md-4">
                                             <label class="form-label">الاسم (EN)</label>
                                             <input type="text" name="full_name_en" id="ocr_name_en" class="form-control font-monospace">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label">الجنسية</label>
-                                            <select name="nationality" id="ocr_nationality" class="form-select">
-                                                <option value="">اختر...</option>
-                                                <?php foreach ($all_countries as $country): ?>
-                                                    <option value="<?php echo htmlspecialchars($country['country_name']); ?>" data-code="<?php echo htmlspecialchars($country['country_code']); ?>"><?php echo htmlspecialchars($country['country_name']); ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
                                         </div>
                                         <div class="col-md-4">
                                             <label class="form-label">الجنس</label>
@@ -804,72 +1079,40 @@ require_once 'header.php';
                                                 <option value="Female">أنثى</option>
                                             </select>
                                         </div>
-                                        <div class="col-md-4">
+                                        <div class="col-md-3">
+                                            <label class="form-label">الجنسية</label>
+                                            <select name="nationality" id="ocr_nationality" class="form-select">
+                                                <option value="">اختر...</option>
+                                                <?php foreach ($all_countries as $country): ?>
+                                                    <option value="<?php echo htmlspecialchars($country['country_name']); ?>" data-code="<?php echo htmlspecialchars($country['country_code']); ?>"><?php echo htmlspecialchars($country['country_name']); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
                                             <label class="form-label">تاريخ الميلاد</label>
                                             <input type="date" name="date_of_birth" id="ocr_dob" class="form-control">
                                         </div>
-                                        <div class="col-md-6">
+                                        <div class="col-md-3">
+                                            <label class="form-label">تاريخ إصدار الجواز</label>
+                                            <input type="date" name="passport_issue_date" id="ocr_issue_date" class="form-control">
+                                        </div>
+                                        <div class="col-md-3">
                                             <label class="form-label text-danger">انتهاء الجواز</label>
                                             <input type="date" name="passport_expiry_date" id="ocr_expiry" class="form-control border-danger">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label">رقم التواصل</label>
-                                            <input type="text" name="phone_number" class="form-control" placeholder="00966...">
+                                            <div id="passport_expiry_error" class="text-danger small mt-1"></div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- القسم 2: المستضيف والضمان -->
-                            <div class="form-section-card">
-                                <div class="form-section-header">
-                                    <i class="fas fa-shield-alt text-warning"></i>
-                                    <h6>2. المستضيف والضمان</h6>
-                                </div>
-                                <div class="form-section-body">
-                                    <div class="row g-3">
-                                        <div class="col-12">
-                                            <label class="form-label">المستضيف</label>
-                                            <div class="input-group">
-                                                <select name="host_id" id="host_select" class="form-select" required>
-                                                    <option value="">-- اختر مستضيف --</option>
-                                                    <?php foreach ($saved_hosts as $sh): ?>
-                                                        <option value="<?php echo $sh['id']; ?>"><?php echo htmlspecialchars($sh['host_name']); ?></option>
-                                                    <?php endforeach; ?>
-                                                </select>
-                                                <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#quickAddHostModal"><i class="fas fa-plus"></i></button>
-                                            </div>
-                                        </div>
-                                        <div class="col-12">
-                                            <label class="form-label">الضمان</label>
-                                            <div class="input-group">
-                                                <select name="guarantor_id" id="guarantor_select" class="form-select" required>
-                                                    <option value="">-- اختر ضامن --</option>
-                                                    <?php foreach ($saved_guarantors as $sg): ?>
-                                                        <option value="<?php echo $sg['id']; ?>"><?php echo htmlspecialchars($sg['guarantor_name']); ?></option>
-                                                    <?php endforeach; ?>
-                                                </select>
-                                                <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#quickAddGuarantorModal"><i class="fas fa-plus"></i></button>
-                                            </div>
-                                        </div>
-                                        <div class="col-12">
-                                            <label class="form-label">ملاحظات سريعة</label>
-                                            <input type="text" name="notes" class="form-control" placeholder="ملاحظات إضافية...">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- العمود الأيمن: البيانات المالية والفاتورة -->
-                        <div class="col-lg-6">
+                            <!-- القسم 2: البيانات المالية (الفاتورة) at the bottom -->
                             <?php
                             // إعداد بيانات الفاتورة الحالية
                             $current_invoice = [
-                                'invoice_date' => date('Y-m-d'),
+                                'invoice_date' => normalize_datetime_db(null),
                                 'branch_id' => (count($branches) === 1) ? $branches[0]['id'] : null,
-                                'source_type' => 'حج وعمرة',
-                                'delivery_type' => 'cash',
+                                'source_type' => $umrah_service_name,
+                                'delivery_type' => $settings['default_delivery_type'] ?? 'draft',
                                 'total_amount' => 0,
                                 'discount' => 0,
                                 'cost_amount' => 0,
@@ -879,6 +1122,16 @@ require_once 'header.php';
                             ];
                             $financial_fields_select2_parent = '#addUmrahModal';
                             $financial_fields_show_service_select = false;
+                            $financial_fields_header_layout = 'split_rows';
+                            $financial_fields_hide_service_accounts = true;
+                            $financial_fields_show_host_guarantor = true;
+                            $financial_fields_hosts = $saved_hosts;
+                            $financial_fields_guarantors = $saved_guarantors;
+                            $financial_fields_show_supplier = has_permission('umrah_show_supplier');
+                            $financial_fields_show_cost_currency = has_permission('umrah_show_cost_currency');
+                            $financial_fields_show_cost_amount = has_permission('umrah_show_cost_amount');
+                            $financial_fields_show_discount = has_permission('umrah_show_discount');
+                            $financial_fields_show_notes_field = true;
                             include '../includes/financial_fields.php';
                             ?>
                         </div>
@@ -944,6 +1197,10 @@ require_once 'header.php';
         margin: 1.5rem auto;
     }
 
+    #addUmrahModal .modal-dialog-scrollable {
+        height: calc(100vh - 3rem);
+    }
+
     #viewModal .modal-dialog {
         width: 1300px;
         max-width: 95%;
@@ -959,18 +1216,38 @@ require_once 'header.php';
         border: none;
         border-radius: 0.75rem;
         box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.15);
-        max-height: 90vh;
+        height: 100%;
+        max-height: calc(100vh - 3rem);
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
-    
+
+    #addUmrahModal #addUmrahForm {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
     #addUmrahModal .modal-body {
-        flex-grow: 1;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-bottom: 1rem;
     }
-    
+
     #addUmrahModal .modal-footer {
         flex-shrink: 0;
+        position: sticky;
+        bottom: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        flex-wrap: wrap;
     }
 
     #addUmrahModal .modal-header {
@@ -1040,7 +1317,70 @@ require_once 'header.php';
     }
 
     #addUmrahModal .modal-footer {
-        padding: 0.3rem 1.5rem;
+        padding: 0.85rem 1.25rem;
+        box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.06);
+        border-top: 1px solid rgba(203, 213, 225, 0.9);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(248, 250, 252, 0.98) 100%);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    #addUmrahModal .modal-footer .btn {
+        min-width: 150px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+    }
+
+    #addUmrahModal .modal-footer .btn:hover {
+        transform: translateY(-1px);
+    }
+
+    #addUmrahModal .modal-footer .btn-outline-secondary {
+        border-color: #cbd5e1;
+        color: #475569;
+        background: rgba(255, 255, 255, 0.72);
+    }
+
+    #addUmrahModal .modal-footer .btn-outline-secondary:hover {
+        background: #eef2f7;
+        color: #334155;
+        border-color: #94a3b8;
+    }
+
+    #addUmrahModal .modal-footer .btn-success {
+        background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+        border-color: #16a34a;
+    }
+
+    #addUmrahModal .modal-footer .btn-success:hover {
+        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+        border-color: #15803d;
+    }
+
+    @media (max-width: 767.98px) {
+        #addUmrahModal .modal-dialog {
+            max-width: calc(100% - 1rem);
+            margin: 0.5rem auto;
+        }
+
+        #addUmrahModal .modal-dialog-scrollable,
+        #addUmrahModal .modal-content {
+            max-height: calc(100vh - 1rem);
+        }
+
+        #addUmrahModal .modal-footer {
+            padding: 0.75rem;
+            justify-content: stretch;
+        }
+
+        #addUmrahModal .modal-footer .btn {
+            width: 100%;
+            min-width: 0;
+        }
     }
 
     /* تحسينات الـ Modal */
@@ -1190,6 +1530,104 @@ require_once 'header.php';
         border-right: 5px solid var(--primary-color);
         color: #3730a3;
         border-radius: 0.75rem;
+    }
+
+    .umrah-alert-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
+    }
+
+    .umrah-page-alert {
+        position: relative;
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1rem 3.25rem 1rem 1rem;
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid transparent;
+    }
+
+    .umrah-page-alert::before {
+        content: '';
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 4px;
+        background: currentColor;
+        opacity: 0.9;
+    }
+
+    .umrah-page-alert .btn-close {
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        opacity: 0.75;
+    }
+
+    .umrah-page-alert-icon {
+        width: 2.75rem;
+        height: 2.75rem;
+        border-radius: 0.9rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1.05rem;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+    }
+
+    .umrah-page-alert-content {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        min-width: 0;
+    }
+
+    .umrah-page-alert-title {
+        font-weight: 800;
+        font-size: 0.98rem;
+        line-height: 1.35;
+    }
+
+    .umrah-page-alert-text {
+        font-size: 0.88rem;
+        line-height: 1.65;
+        opacity: 0.9;
+    }
+
+    .umrah-page-alert-success {
+        color: #166534;
+        background: linear-gradient(135deg, rgba(236, 253, 245, 0.98) 0%, rgba(220, 252, 231, 0.95) 100%);
+        border-color: rgba(34, 197, 94, 0.18);
+    }
+
+    .umrah-page-alert-success .umrah-page-alert-icon {
+        color: #15803d;
+        background: rgba(34, 197, 94, 0.14);
+    }
+
+    .umrah-page-alert-info {
+        color: #1d4ed8;
+        background: linear-gradient(135deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.95) 100%);
+        border-color: rgba(59, 130, 246, 0.2);
+    }
+
+    .umrah-page-alert-info .umrah-page-alert-icon {
+        color: #2563eb;
+        background: rgba(59, 130, 246, 0.14);
+    }
+
+    .umrah-page-alert-warning {
+        color: #9a3412;
+        background: linear-gradient(135deg, rgba(255, 247, 237, 0.98) 0%, rgba(255, 237, 213, 0.96) 100%);
+        border-color: rgba(249, 115, 22, 0.2);
+    }
+
+    .umrah-page-alert-warning .umrah-page-alert-icon {
+        color: #ea580c;
+        background: rgba(249, 115, 22, 0.14);
     }
 
     /* الخطوط والأرقام */
@@ -1375,8 +1813,25 @@ require_once 'header.php';
     }
 
     body.theme-dark #addUmrahModal .modal-footer {
-        background-color: #1f2937;
-        border-top: 1px solid #2d3748;
+        background: linear-gradient(180deg, rgba(31, 41, 55, 0.92) 0%, rgba(15, 23, 42, 0.98) 100%);
+        border-top: 1px solid rgba(71, 85, 105, 0.9);
+        box-shadow: 0 -10px 24px rgba(2, 6, 23, 0.35);
+    }
+
+    body.theme-dark #addUmrahModal .modal-footer .btn-outline-secondary {
+        background: rgba(30, 41, 59, 0.9);
+        border-color: #475569;
+        color: #e2e8f0;
+    }
+
+    body.theme-dark #addUmrahModal .modal-footer .btn-outline-secondary:hover {
+        background: #334155;
+        border-color: #64748b;
+        color: #f8fafc;
+    }
+
+    body.theme-dark #addUmrahModal .modal-footer .btn {
+        box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
     }
 
     body.theme-dark #account_balance_info,
@@ -1402,6 +1857,55 @@ require_once 'header.php';
         background-color: rgba(59, 130, 246, 0.15) !important;
         border-right-color: #3b82f6 !important;
         color: #93c5fd !important;
+    }
+
+    body.theme-dark .umrah-page-alert,
+    body.dark-mode .umrah-page-alert {
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.28), inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    body.theme-dark .umrah-page-alert .btn-close,
+    body.dark-mode .umrah-page-alert .btn-close {
+        filter: invert(1) grayscale(1);
+    }
+
+    body.theme-dark .umrah-page-alert-success,
+    body.dark-mode .umrah-page-alert-success {
+        color: #bbf7d0;
+        background: linear-gradient(135deg, rgba(20, 83, 45, 0.88) 0%, rgba(21, 128, 61, 0.18) 100%);
+        border-color: rgba(34, 197, 94, 0.2);
+    }
+
+    body.theme-dark .umrah-page-alert-success .umrah-page-alert-icon,
+    body.dark-mode .umrah-page-alert-success .umrah-page-alert-icon {
+        color: #86efac;
+        background: rgba(34, 197, 94, 0.16);
+    }
+
+    body.theme-dark .umrah-page-alert-info,
+    body.dark-mode .umrah-page-alert-info {
+        color: #bfdbfe;
+        background: linear-gradient(135deg, rgba(30, 64, 175, 0.28) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border-color: rgba(96, 165, 250, 0.18);
+    }
+
+    body.theme-dark .umrah-page-alert-info .umrah-page-alert-icon,
+    body.dark-mode .umrah-page-alert-info .umrah-page-alert-icon {
+        color: #93c5fd;
+        background: rgba(59, 130, 246, 0.18);
+    }
+
+    body.theme-dark .umrah-page-alert-warning,
+    body.dark-mode .umrah-page-alert-warning {
+        color: #fdba74;
+        background: linear-gradient(135deg, rgba(124, 45, 18, 0.4) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border-color: rgba(251, 146, 60, 0.2);
+    }
+
+    body.theme-dark .umrah-page-alert-warning .umrah-page-alert-icon,
+    body.dark-mode .umrah-page-alert-warning .umrah-page-alert-icon {
+        color: #fb923c;
+        background: rgba(249, 115, 22, 0.18);
     }
 </style>
 
@@ -1480,25 +1984,31 @@ require_once 'header.php';
 <!-- Modal تعديل معتمر -->
 <div class="modal fade" id="editUmrahModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
-        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+        <div class="modal-content">
             <form id="editUmrahForm" method="POST" enctype="multipart/form-data">
                 <?php echo csrf_input(); ?>
                 <input type="hidden" name="action" value="update_traveler">
                 <input type="hidden" name="id" id="edit_passport_id">
-                <div class="modal-header bg-primary text-white border-0 py-3">
+                <div class="modal-header">
                     <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل بيانات المعتمر</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div id="editUmrahModalBody" class="modal-body p-3" style="max-height: 85vh; overflow-y: auto;">
-                    <!-- سيتم تحميل المحتوى هنا -->
-                    <div class="text-center py-5">
-                        <div class="spinner-border text-primary" role="status"></div>
-                        <div class="mt-2 text-muted">جاري تحميل بيانات المعتمر...</div>
+                <div class="modal-body p-4">
+                    <div id="editUmrahModalBody">
+                        <!-- سيتم تحميل المحتوى هنا -->
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <div class="mt-2 text-muted">جاري تحميل بيانات المعتمر...</div>
+                        </div>
                     </div>
                 </div>
-                <div class="modal-footer border-0 p-4 bg-light shadow-sm">
-                    <button type="button" class="btn btn-white rounded-pill px-4 fw-bold border shadow-sm" data-bs-dismiss="modal">إلغاء</button>
-                    <button type="submit" class="btn btn-primary rounded-pill px-5 fw-bold shadow"><i class="fas fa-save me-2"></i> حفظ التعديلات</button>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-rounded btn-outline-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times me-2"></i>إلغاء
+                    </button>
+                    <button type="submit" class="btn btn-rounded btn-success">
+                        <i class="fas fa-save me-2"></i> حفظ التعديلات
+                    </button>
                 </div>
             </form>
         </div>
@@ -1515,14 +2025,66 @@ require_once 'header.php';
     const customerAccounts = <?php echo json_encode($customer_accounts); ?>;
     const agentsAccounts = <?php echo json_encode($agents_accounts); ?>;
 
-    console.log('Cash Accounts:', cashAccounts);
-    console.log('Bank Accounts:', bankAccounts);
-    console.log('Customer Accounts:', customerAccounts);
-    console.log('Agents Accounts:', agentsAccounts);
-    
     const umrahServicePrices = <?php echo json_encode($umrah_service_prices); ?>;
     const umrahBranchId = <?php echo json_encode($currentUser['branch_id']); ?>;
     const umrahAgentId = <?php echo json_encode($currentUser['agent_id'] ?? 'null'); ?>;
+    const umrahMinPassportValidityMonths = <?php echo json_encode((int)($umrah_settings['min_passport_validity_months'] ?? 6)); ?>;
+    
+    // Validate passport expiry date (works for both add and edit forms)
+    function validatePassportExpiry(expiryInputId, errorDivId) {
+        const expiryInput = document.getElementById(expiryInputId);
+        const errorDiv = document.getElementById(errorDivId);
+        
+        if (!expiryInput || !errorDiv) return;
+        
+        const expiryDate = new Date(expiryInput.value);
+        const today = new Date();
+        
+        // Clear time part for accurate comparison
+        today.setHours(0, 0, 0, 0);
+        expiryDate.setHours(0, 0, 0, 0);
+        
+        // Calculate minimum allowed expiry date
+        const minExpiryDate = new Date(today);
+        minExpiryDate.setMonth(minExpiryDate.getMonth() + umrahMinPassportValidityMonths);
+        
+        if (!expiryInput.value) {
+            errorDiv.textContent = '';
+            return;
+        }
+        
+        if (expiryDate < minExpiryDate) {
+            // Format dates for display (dd/mm/yyyy)
+            const minExpiryStr = minExpiryDate.toLocaleDateString('ar-EG', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            errorDiv.textContent = 'صلاحية الجواز لا يمكن أن تكون أقل من ' + umrahMinPassportValidityMonths + ' أشهر. التاريخ الأدنى المطلوب هو: ' + minExpiryStr;
+        } else {
+            errorDiv.textContent = '';
+        }
+    }
+    
+    // Attach event listeners to both add and edit inputs
+    function attachPassportExpiryListeners() {
+        // Add form
+        const addExpiryInput = document.getElementById('ocr_expiry');
+        if (addExpiryInput) {
+            addExpiryInput.addEventListener('change', () => validatePassportExpiry('ocr_expiry', 'passport_expiry_error'));
+            addExpiryInput.addEventListener('input', () => validatePassportExpiry('ocr_expiry', 'passport_expiry_error'));
+        }
+        
+        // Edit form
+        const editExpiryInput = document.getElementById('edit_ocr_expiry');
+        if (editExpiryInput) {
+            editExpiryInput.addEventListener('change', () => validatePassportExpiry('edit_ocr_expiry', 'edit_passport_expiry_error'));
+            editExpiryInput.addEventListener('input', () => validatePassportExpiry('edit_ocr_expiry', 'edit_passport_expiry_error'));
+        }
+    }
+    
+    // Attach event listeners on initial load
+    document.addEventListener('DOMContentLoaded', function() {
+        attachPassportExpiryListeners();
+        // Run validation on initial load for the add form!
+        validatePassportExpiry('ocr_expiry', 'passport_expiry_error');
+    });
     
     // Function to find the best matching service price
     function findUmrahServicePrice(customerId = null, supplierId = null) {
@@ -1666,6 +2228,25 @@ require_once 'header.php';
 
     // معالجة الـ OCR باستخدام Tesseract.js للتركيز على MRZ
 
+    // #region debug-point A:ocr-helper
+    function umrahOcrDebugReport(hypothesisId, msg, data = {}, runId = 'pre-fix') {
+        fetch('http://127.0.0.1:7777/event', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                sessionId: 'umrah-ocr-darkmode',
+                runId,
+                hypothesisId,
+                location: 'admin/umrah.php',
+                msg: `[DEBUG] ${msg}`,
+                data,
+                ts: Date.now()
+            })
+        }).catch(() => {});
+    }
+    // #endregion
 
 
     // دالة معالجة الصورة (Preprocessing)
@@ -2006,18 +2587,120 @@ require_once 'header.php';
 
 
     $(document).ready(function() {
+        async function showPageDialog({ title, text, html, icon = 'info', confirmText = 'حسناً', cancelText = 'إلغاء', showCancel = false }) {
+            const isDark = document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode');
+
+            if (window.Swal && typeof window.Swal.fire === 'function') {
+                return await window.Swal.fire({
+                    title,
+                    text,
+                    html,
+                    icon,
+                    showCancelButton: showCancel,
+                    confirmButtonText: confirmText,
+                    cancelButtonText: cancelText,
+                    reverseButtons: true,
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a',
+                    confirmButtonColor: isDark ? '#2563eb' : undefined,
+                    cancelButtonColor: isDark ? '#475569' : undefined
+                });
+            }
+
+            if (showCancel) {
+                return { isConfirmed: window.confirm(text || title || '') };
+            }
+
+            window.alert(text || title || '');
+            return { isConfirmed: true };
+        }
+
+        async function confirmDialog({ title, text, icon, confirmText, cancelText }) {
+            const res = await showPageDialog({
+                title,
+                text,
+                icon: icon || 'question',
+                confirmText: confirmText || 'تأكيد',
+                cancelText: cancelText || 'إلغاء',
+                showCancel: true
+            });
+            return !!res.isConfirmed;
+        }
+
+        $(document).on('submit', 'form.js-confirm-submit', async function(e) {
+            if (this.dataset.confirmed === '1') {
+                this.dataset.confirmed = '0';
+                return true;
+            }
+
+            e.preventDefault();
+
+            const ok = await confirmDialog({
+                title: this.dataset.confirmTitle || 'تأكيد العملية',
+                text: this.dataset.confirmText || 'هل تريد المتابعة؟',
+                icon: this.dataset.confirmIcon || 'warning',
+                confirmText: this.dataset.confirmButton || 'نعم',
+                cancelText: this.dataset.cancelButton || 'إلغاء'
+            });
+
+            if (ok) {
+                this.dataset.confirmed = '1';
+                this.requestSubmit ? this.requestSubmit() : this.submit();
+            }
+
+            return false;
+        });
+
+        function resetAddUmrahForm() {
+            const form = document.getElementById('addUmrahForm');
+            if (!form) {
+                return;
+            }
+
+            form.reset();
+            form.querySelectorAll('.is-invalid, .is-valid').forEach(el => el.classList.remove('is-invalid', 'is-valid'));
+
+            $('#customer_id_hidden, #agent_id_hidden').val('');
+            $('#addUmrahModal select').each(function() {
+                $(this).trigger('change');
+            });
+
+            $('#addUmrahModal .select2-financial').each(function() {
+                $(this).val($(this).find('option[selected]').val() || '').trigger('change');
+            });
+        }
+
+        const addUmrahModalEl = document.getElementById('addUmrahModal');
+        if (addUmrahModalEl) {
+            addUmrahModalEl.addEventListener('hidden.bs.modal', function() {
+                resetAddUmrahForm();
+            });
+        }
+
+        if (new URLSearchParams(window.location.search).has('deleted')) {
+            resetAddUmrahForm();
+        }
+
         // حفظ المعاملة
-        $('#addUmrahForm').on('submit', function(e) {
+        $('#addUmrahForm').off('submit.umrahAdd').on('submit.umrahAdd', function(e) {
             e.preventDefault();
 
             const recordVal = $('#record_purchase').val();
             if (recordVal === null || recordVal === '') {
-                alert('يرجى اختيار ما إذا كنت تريد تسجيل مديونية للمورد أم لا.');
+                showPageDialog({
+                    title: 'بيانات ناقصة',
+                    text: 'يرجى اختيار ما إذا كنت تريد تسجيل مديونية للمورد أم لا.',
+                    icon: 'warning'
+                });
                 $('#record_purchase').focus();
                 return;
             }
             if (window.validateDiscount && !window.validateDiscount()) {
-                alert('عفواً! لا يمكن حفظ المعاملة لأن السعر بعد الخصم أقل من سعر التكلفة.');
+                showPageDialog({
+                    title: 'تحذير مالي',
+                    text: 'عفواً! لا يمكن حفظ المعاملة لأن السعر بعد الخصم أقل من سعر التكلفة.',
+                    icon: 'warning'
+                });
                 $('#discount').focus();
                 return;
             }
@@ -2038,6 +2721,9 @@ require_once 'header.php';
                 processData: false, // Important for FormData
                 contentType: false, // Important for FormData
                 dataType: 'json',
+                beforeSend: function() {
+                    $('#addUmrahModal .modal-footer button[type="submit"]').prop('disabled', true);
+                },
                 success: function(response) {
                     if (response.success) {
                         Swal.fire({
@@ -2065,6 +2751,9 @@ require_once 'header.php';
                         text: 'تعذر الاتصال بالخادم. الرجاء المحاولة مرة أخرى.'
                     });
                     console.error('AJAX Error:', status, error);
+                },
+                complete: function() {
+                    $('#addUmrahModal .modal-footer button[type="submit"]').prop('disabled', false);
                 }
             });
         });
@@ -2324,8 +3013,15 @@ require_once 'header.php';
         },
 
         // تنفيذ الانتقال
-        executeTransition: function(id, toStepId) {
-            if (!confirm('هل أنت متأكد من نقل المعاملة لهذه المرحلة؟')) return;
+        executeTransition: async function(id, toStepId) {
+            const confirmed = await confirmDialog({
+                title: 'تأكيد نقل المعاملة',
+                text: 'هل أنت متأكد من نقل المعاملة لهذه المرحلة؟',
+                icon: 'warning',
+                confirmText: 'نعم، انقل',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
 
             const notes = $('#trans_notes').val();
             const extraData = {};
@@ -2383,15 +3079,18 @@ require_once 'header.php';
                 },
                 error: function(xhr, status, error) {
                     console.error('AJAX Error:', xhr.responseText);
-                    Swal.fire({
-                        title: 'خطأ في الخادم (Server Error)',
-                        html: `<div class="text-start extra-small bg-light p-2 border rounded" style="max-height:200px; overflow:auto;">
+                    const detailsClass = document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode')
+                        ? 'text-start extra-small p-3 border rounded-3'
+                        : 'text-start extra-small bg-light p-3 border rounded-3';
+                    showPageDialog({
+                        title: 'خطأ في الخادم',
+                        html: `<div class="${detailsClass}" style="max-height:220px; overflow:auto; background:${document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode') ? '#111827' : '#f8fafc'}; border-color:${document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode') ? '#334155' : '#cbd5e1'};">
                                     <strong>الحالة:</strong> ${status}<br>
                                     <strong>الخطأ:</strong> ${error}<br>
                                     <hr>
                                     <strong>رد الخادم:</strong><br>
-                                    <pre class="m-0" style="white-space: pre-wrap;">${xhr.responseText || 'لا يوجد رد من الخادم'}</pre>
-                                   </div>`,
+                                    <pre class="m-0" style="white-space: pre-wrap; color: inherit;">${xhr.responseText || 'لا يوجد رد من الخادم'}</pre>
+                               </div>`,
                         icon: 'error'
                     });
                 }
@@ -2399,8 +3098,15 @@ require_once 'header.php';
         },
 
         // اعتماد مالي
-        approveFinance: function(id) {
-            if (!confirm('هل أنت متأكد من اعتماد الحسابات لهذه المعاملة؟')) return;
+        approveFinance: async function(id) {
+            const confirmed = await confirmDialog({
+                title: 'تأكيد اعتماد الحسابات',
+                text: 'هل أنت متأكد من اعتماد الحسابات لهذه المعاملة؟',
+                icon: 'warning',
+                confirmText: 'نعم، اعتمد',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
 
             $.post('ajax_umrah.php', {
                 action: 'approve_finance',
@@ -2418,12 +3124,20 @@ require_once 'header.php';
         },
 
         // ترحيل مالي (إنشاء فاتورة)
-        postFinance: function(id) {
-            if (!confirm('هل أنت متأكد من الترحيل المالي لهذه المعاملة؟ سيتم إنشاء فاتورة مبيعات وتقييد المبلغ.')) return;
+        postFinance: async function(id) {
+            const confirmed = await confirmDialog({
+                title: 'تأكيد الترحيل المالي',
+                text: 'هل أنت متأكد من الترحيل المالي لهذه المعاملة؟ سيتم إنشاء فاتورة مبيعات وتقييد المبلغ.',
+                icon: 'warning',
+                confirmText: 'نعم، رحّل',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
 
             $.post('ajax_umrah.php', {
                 action: 'post_finance',
-                id: id
+                id: id,
+                csrf_token: CSRF_TOKEN
             }, function(res) {
                 if (res.status === 'success') {
                     Swal.fire('تم بنجاح', res.message, 'success').then(() => {
@@ -2447,6 +3161,12 @@ require_once 'header.php';
             fetch(`ajax_umrah.php?action=view_details&id=${id}`)
                 .then(res => {
                     if (!res.ok) throw new Error('خطأ في استجابة الخادم');
+                    const contentType = res.headers.get('content-type') || '';
+                    if (contentType.includes('application/json')) {
+                        return res.json().then(payload => {
+                            throw new Error(payload.message || 'تعذر تحميل تفاصيل المعاملة');
+                        });
+                    }
                     return res.text();
                 })
                 .then(html => {
@@ -2487,7 +3207,8 @@ require_once 'header.php';
                             action: 'process_umrah_transition',
                             passport_id: id,
                             to_step_id: toStepId,
-                            notes: 'تغيير يدوي لمرحلة سير العمل بواسطة الإدارة'
+                            notes: 'تغيير يدوي لمرحلة سير العمل بواسطة الإدارة',
+                            csrf_token: CSRF_TOKEN
                         },
                         dataType: 'json',
                         success: function(res) {
@@ -2548,7 +3269,8 @@ require_once 'header.php';
                 if (result.isConfirmed) {
                     $.post('ajax_umrah.php', {
                         action: 'delete_invoice',
-                        id: id
+                        id: id,
+                        csrf_token: CSRF_TOKEN
                     }, function(res) {
                         if (res.status === 'success') {
                             Swal.fire('تم الحذف!', res.message, 'success').then(() => {
@@ -2624,6 +3346,14 @@ require_once 'header.php';
                         document.getElementById('editUmrahModalBody').innerHTML = html;
                         // بعد تحميل المحتوى، قم بتهيئة أي سكريبتات jQuery أو دوال أخرى إذا لزم الأمر
                         Umrah.initEditModal(id);
+                        // Attach passport expiry listeners for the edit form!
+                        attachPassportExpiryListeners();
+                        // Run the validation once for the existing value!
+                        validatePassportExpiry('edit_ocr_expiry', 'edit_passport_expiry_error');
+                        // Initialize financial fields for edit form!
+                        if (typeof initFinancialFields !== 'undefined') {
+                            initFinancialFields();
+                        }
                     });
             });
         });
@@ -2667,7 +3397,17 @@ require_once 'header.php';
         if (scanBtn) {
             scanBtn.addEventListener('click', async function() {
                 const fileInput = document.getElementById('passportOCR');
+                // #region debug-point A:ocr-click
+                umrahOcrDebugReport('A', 'OCR button clicked', {
+                    hasFileInput: !!fileInput,
+                    hasFile: !!(fileInput && fileInput.files && fileInput.files[0]),
+                    themeDark: document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode')
+                });
+                // #endregion
                 if (!fileInput || !fileInput.files[0]) {
+                    // #region debug-point A:ocr-no-file
+                    umrahOcrDebugReport('A', 'OCR aborted: no file selected');
+                    // #endregion
                     Swal.fire({
                         title: 'تنبيه',
                         text: 'يرجى اختيار صورة الجواز أولاً',
@@ -2691,6 +3431,13 @@ require_once 'header.php';
                 });
 
                 try {
+                    // #region debug-point B:create-worker
+                    umrahOcrDebugReport('B', 'Creating Tesseract worker', {
+                        fileName: fileInput.files[0]?.name || null,
+                        fileType: fileInput.files[0]?.type || null,
+                        fileSize: fileInput.files[0]?.size || null
+                    });
+                    // #endregion
                     const worker = await Tesseract.createWorker('eng', 1, {
                         logger: m => {
                             if (m.status === 'recognizing text') {
@@ -2705,11 +3452,19 @@ require_once 'header.php';
                         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
                         tessedit_pageseg_mode: '6'
                     });
+                    // #region debug-point B:worker-ready
+                    umrahOcrDebugReport('B', 'Tesseract worker ready');
+                    // #endregion
 
                     const angles = [0, -2, 2, -4, 4, -6, 6];
                     let data = null;
                     let finalMRZImage = null;
                     for (const angle of angles) {
+                        // #region debug-point C:angle-start
+                        umrahOcrDebugReport('C', 'Starting OCR angle attempt', {
+                            angle
+                        });
+                        // #endregion
                         const processedImage = await preprocessPassportImage(fileInput.files[0], angle);
                         const {
                             data: {
@@ -2717,23 +3472,39 @@ require_once 'header.php';
                                 blocks
                             }
                         } = await worker.recognize(processedImage);
-                        const mrz = extractMRZ(text);
-
-                        if (mrz && mrz.length > 5) {
-                            data = parseMRZ(mrz);
+                        // #region debug-point C:angle-result
+                        umrahOcrDebugReport('C', 'OCR angle result received', {
+                            angle,
+                            textSample: (text || '').substring(0, 180),
+                            blockCount: Array.isArray(blocks) ? blocks.length : null
+                        });
+                        // #endregion
+                        const parsed = parseMRZ(text);
+                        // #region debug-point D:parse-result
+                        umrahOcrDebugReport('D', 'MRZ parse attempted', {
+                            angle,
+                            parsed: !!parsed,
+                            passportNumber: parsed?.passport_number || null,
+                            nationality: parsed?.nationality || null
+                        });
+                        // #endregion
+                        if (parsed) {
+                            data = parsed;
                             finalMRZImage = processedImage;
                             break;
                         }
                     }
 
                     await worker.terminate();
+                    // #region debug-point B:worker-terminated
+                    umrahOcrDebugReport('B', 'Tesseract worker terminated', {
+                        success: !!data
+                    });
+                    // #endregion
 
                     if (data) {
                         // تعبئة البيانات في الفورم
                         document.getElementById('ocr_passport').value = data.passport_number || '';
-                        document.getElementById('ocr_nationality').value = data.nationality_code || '';
-                        // قم بتحديث قائمة الجنسيات لجعل القيمة المحددة مرئية
-                        $('#ocr_nationality').trigger('change');
 
                         if (data.date_of_birth) {
                             document.getElementById('ocr_dob').value = data.date_of_birth;
@@ -2748,18 +3519,21 @@ require_once 'header.php';
                             document.getElementById('ocr_name_en').value = data.full_name_en;
                         }
 
-                        // محاولة استنتاج الجنس
-                        if (data.mrz_line_2) {
-                            const genderChar = data.mrz_line_2.charAt(20);
-                            if (genderChar === 'M') document.getElementById('ocr_gender').value = 'Male';
-                            else if (genderChar === 'F') document.getElementById('ocr_gender').value = 'Female';
-                        }
+                        fillGenderAndNationality('ocr', data.mrz_line_2);
+                        $('#ocr_nationality').trigger('change');
 
                         // عرض الصورة المعالجة إذا وجدت
                         const previewContainer = document.getElementById('ocr_passport_preview');
                         const previewImg = previewContainer.querySelector('img');
                         if (previewImg) previewImg.src = finalMRZImage;
                         previewContainer.classList.remove('d-none');
+                        // #region debug-point E:ocr-success
+                        umrahOcrDebugReport('E', 'OCR completed successfully', {
+                            passportNumber: data.passport_number || null,
+                            fullName: data.full_name || null,
+                            themeDark: document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode')
+                        });
+                        // #endregion
                         Swal.fire({
                             title: 'تمت القراءة',
                             text: 'تم استخراج البيانات بنجاح من بصمة الجواز (MRZ)',
@@ -2771,9 +3545,19 @@ require_once 'header.php';
                             text: 'لم يتم العثور على بصمة MRZ صالحة. تأكد من جودة الصورة.',
                             icon: 'warning'
                         });
+                        // #region debug-point D:no-valid-mrz
+                        umrahOcrDebugReport('D', 'OCR finished without valid MRZ');
+                        // #endregion
                     }
                 } catch (err) {
-                    console.error('OCR Error:', err);
+                    // #region debug-point E:ocr-error
+                    umrahOcrDebugReport('E', 'OCR exception thrown', {
+                        name: err?.name || null,
+                        message: err?.message || String(err),
+                        stack: err?.stack ? String(err.stack).substring(0, 400) : null,
+                        themeDark: document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode')
+                    });
+                    // #endregion
                     Swal.fire({
                         title: 'خطأ',
                         text: 'حدث خطأ غير متوقع أثناء المعالجة.',
@@ -2810,60 +3594,6 @@ require_once 'header.php';
                 },
                 error: function() {
                     Swal.fire('خطأ', 'حدث خطأ أثناء الاتصال بالخادم', 'error');
-                }
-            });
-        });
-
-        // Handle addUmrahForm submission via AJAX
-        $('#addUmrahForm').on('submit', function(e) {
-            e.preventDefault(); // Prevent default form submission
-
-            var formData = new FormData(this); // Collect form data including files
-            formData.append('action', 'add_umrah'); // Ensure action is set
-
-            $.ajax({
-                url: 'ajax_umrah.php',
-                type: 'POST',
-                data: formData,
-                processData: false, // Don't process the data
-                contentType: false, // Don't set content type (let FormData do it)
-                dataType: 'json',
-                beforeSend: function() {
-                    // Optionally disable submit button or show a loader
-                    $('#addUmrahModal .modal-footer button[type="submit"]').prop('disabled', true);
-                },
-                success: function(response) {
-                    if (response.status === 'success') {
-                        Swal.fire({
-                            title: 'تم بنجاح',
-                            text: response.message,
-                            icon: 'success',
-                            confirmButtonText: 'حسناً'
-                        }).then(() => {
-                            $('#addUmrahModal').modal('hide');
-                            location.reload();
-                        });
-                    } else {
-                        Swal.fire({
-                            title: 'خطأ',
-                            text: response.message,
-                            icon: 'error',
-                            confirmButtonText: 'حسناً'
-                        });
-                    }
-                },
-                error: function(xhr, status, error) {
-                    console.error("AJAX Error: " + status + " - " + error);
-                    Swal.fire({
-                        title: 'خطأ',
-                        text: 'حدث خطأ أثناء الاتصال بالخادم. الرجاء المحاولة مرة أخرى.',
-                        icon: 'error',
-                        confirmButtonText: 'حسناً'
-                    });
-                },
-                complete: function() {
-                    // Re-enable submit button
-                    $('#addUmrahModal .modal-footer button[type="submit"]').prop('disabled', false);
                 }
             });
         });

@@ -18,6 +18,10 @@ if($user_role === 'editor' && !$settings_check['allow_editor_slider']) {
     exit();
 }
 
+$legacyDeleteError = isset($_GET['delete'])
+    ? 'تم تعطيل تنفيذ الحذف عبر الرابط المباشر. استخدم زر الحذف الداخلي المحمي فقط.'
+    : '';
+
 $upload_dir = '../assets/uploads/slider/';
 if (!is_dir($upload_dir)) {
     mkdir($upload_dir, 0777, true);
@@ -88,13 +92,16 @@ if(isset($_POST['ajax_upload'])) {
 }
 
 // 2. معالجة الحذف (قبل Header أيضاً)
-if(isset($_GET['delete'])) {
+if(isset($_POST['delete_slider_image'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='slider.php';</script>");
+    }
     $stmt = $pdo->prepare("SELECT image_path FROM slider_images WHERE id = ?");
-    $stmt->execute([$_GET['delete']]);
+    $stmt->execute([(int)$_POST['delete_slider_image']]);
     $img = $stmt->fetch();
     if($img) {
         @unlink($upload_dir . $img['image_path']);
-        $pdo->prepare("DELETE FROM slider_images WHERE id = ?")->execute([$_GET['delete']]);
+        $pdo->prepare("DELETE FROM slider_images WHERE id = ?")->execute([(int)$_POST['delete_slider_image']]);
     }
     header('Location: slider.php?deleted=1');
     exit();
@@ -162,6 +169,9 @@ $settings = getSettings($pdo);
     <?php if(isset($_GET['deleted'])): ?>
         <div class="alert alert-danger border-0 shadow-sm rounded-3 py-3">تم الحذف بنجاح.</div>
     <?php endif; ?>
+    <?php if($legacyDeleteError): ?>
+        <div class="alert alert-warning border-0 shadow-sm rounded-3 py-3"><?php echo $legacyDeleteError; ?></div>
+    <?php endif; ?>
 
     <div class="row">
         <?php foreach($images as $img): ?>
@@ -170,9 +180,13 @@ $settings = getSettings($pdo);
                 <div class="position-relative">
                     <img src="../assets/uploads/slider/<?php echo rawurlencode($img['image_path']); ?>" class="card-img-top" style="height: 220px; object-fit: cover;">
                     <div class="position-absolute top-0 end-0 p-3">
-                        <a href="?delete=<?php echo $img['id']; ?>" class="btn btn-danger btn-sm rounded-circle shadow" onclick="return confirm('هل أنت متأكد من الحذف؟')">
-                            <i class="fas fa-trash"></i>
-                        </a>
+                        <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من الحذف؟')">
+                            <?php echo csrf_input(); ?>
+                            <input type="hidden" name="delete_slider_image" value="<?php echo $img['id']; ?>">
+                            <button type="submit" class="btn btn-danger btn-sm rounded-circle shadow">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </form>
                     </div>
                 </div>
                 <div class="card-body p-3 text-center">

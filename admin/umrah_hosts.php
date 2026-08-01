@@ -1,6 +1,9 @@
 <?php
 require_once 'header.php';
 
+$settings = getSettings($pdo);
+$default_max_muatamers = $settings['umrah_default_max_muatamers'] ?? 5;
+
 if (!has_permission('umrah_view')) {
     echo "<script>alert('ليس لديك صلاحية للوصول لهذه الصفحة'); location.href='index.php';</script>";
     exit();
@@ -24,7 +27,9 @@ function upload_image($file_input_name, $target_dir = '../assets/uploads/umrah/'
 // معالجة إضافة مستضيف جديد
 if (isset($_POST['add_host'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
-        $error = "خطأ في التحقق من الطلب (CSRF).";
+        $_SESSION['error'] = "خطأ في التحقق من الطلب (CSRF).";
+        header("Location: umrah_hosts.php");
+        exit();
     } elseif (has_permission('umrah_create')) {
         try {
             $iqama_image = upload_image('iqama_image');
@@ -37,22 +42,28 @@ if (isset($_POST['add_host'])) {
             $check = $pdo->prepare("SELECT id FROM umrah_hosts WHERE host_name = ? AND phone = ? AND (agent_id = ? OR branch_id = ?)");
             $check->execute([$_POST['host_name'], $_POST['phone'], $agent_id, $branch_id]);
             if ($check->fetch()) {
-                $error = 'هذا المستضيف مسجل مسبقاً بنفس الاسم ورقم الهاتف';
+                $_SESSION['error'] = 'هذا المستضيف مسجل مسبقاً بنفس الاسم ورقم الهاتف';
+                header("Location: umrah_hosts.php");
+                exit();
             } else {
                 $stmt = $pdo->prepare('INSERT INTO umrah_hosts (host_name, phone, address, iqama_image, national_address_image, agent_id, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
                 $stmt->execute([
-                    $_POST['host_name'], 
-                    $_POST['phone'], 
-                    $_POST['address'], 
-                    $iqama_image, 
+                    $_POST['host_name'],
+                    $_POST['phone'],
+                    $_POST['address'],
+                    $iqama_image,
                     $national_address_image,
                     $agent_id,
                     $branch_id
                 ]);
-                echo "<script>location.href='umrah_hosts.php?success=1';</script>";
+                $_SESSION['success'] = 'تم إضافة المستضيف بنجاح';
+                header("Location: umrah_hosts.php");
+                exit();
             }
         } catch (PDOException $e) {
-            $error = 'حدث خطأ: ' . $e->getMessage();
+            $_SESSION['error'] = 'حدث خطأ: ' . $e->getMessage();
+            header("Location: umrah_hosts.php");
+            exit();
         }
     }
 }
@@ -60,7 +71,9 @@ if (isset($_POST['add_host'])) {
 // معالجة تحديث مستضيف
 if (isset($_POST['update_host'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
-        $error = "خطأ في التحقق من الطلب (CSRF).";
+        $_SESSION['error'] = "خطأ في التحقق من الطلب (CSRF).";
+        header("Location: umrah_hosts.php");
+        exit();
     } elseif (has_permission('umrah_edit')) {
         try {
             $current_data = $pdo->prepare('SELECT iqama_image, national_address_image FROM umrah_hosts WHERE id = ?');
@@ -72,16 +85,20 @@ if (isset($_POST['update_host'])) {
 
             $stmt = $pdo->prepare('UPDATE umrah_hosts SET host_name = ?, phone = ?, address = ?, iqama_image = ?, national_address_image = ? WHERE id = ?');
             $stmt->execute([
-                $_POST['host_name'], 
-                $_POST['phone'], 
-                $_POST['address'], 
-                $iqama_image, 
-                $national_address_image, 
+                $_POST['host_name'],
+                $_POST['phone'],
+                $_POST['address'],
+                $iqama_image,
+                $national_address_image,
                 $_POST['id']
             ]);
-            echo "<script>location.href='umrah_hosts.php?success=2';</script>";
+            $_SESSION['success'] = 'تم تحديث المستضيف بنجاح';
+            header("Location: umrah_hosts.php");
+            exit();
         } catch (PDOException $e) {
-            $error = 'حدث خطأ: ' . $e->getMessage();
+            $_SESSION['error'] = 'حدث خطأ: ' . $e->getMessage();
+            header("Location: umrah_hosts.php");
+            exit();
         }
     }
 }
@@ -90,9 +107,22 @@ if (isset($_POST['update_host'])) {
 if (isset($_GET['delete'])) {
     if (has_permission('umrah_delete')) {
         try {
+            $host_id = intval($_GET['delete']);
+            
+            // Check number of mu'tamireen
+            $check_count = $pdo->prepare("SELECT COUNT(*) as cnt FROM passports WHERE host_id = ? AND transaction_type = 'umrah' AND deleted_at IS NULL");
+            $check_count->execute([$host_id]);
+            $count_data = $check_count->fetch();
+            
+            if ($count_data['cnt'] > 0) {
+                $_SESSION['error'] = 'لا يمكن حذف المستضيف لأنه يحتوي على ' . $count_data['cnt'] . ' معتمر/معتمرين.';
+                header("Location: umrah_hosts.php");
+                exit();
+            }
+            
             // First delete related images
             $stmt = $pdo->prepare('SELECT iqama_image, national_address_image FROM umrah_hosts WHERE id = ?');
-            $stmt->execute([$_GET['delete']]);
+            $stmt->execute([$host_id]);
             $images = $stmt->fetch();
             if ($images) {
                 if ($images['iqama_image'] && file_exists('../assets/uploads/umrah/' . $images['iqama_image'])) {
@@ -104,19 +134,79 @@ if (isset($_GET['delete'])) {
             }
 
             $stmt = $pdo->prepare('DELETE FROM umrah_hosts WHERE id = ?');
-            $stmt->execute([$_GET['delete']]);
-            echo "<script>location.href='umrah_hosts.php?success=3';</script>";
+            $stmt->execute([$host_id]);
+            $_SESSION['success'] = 'تم حذف المستضيف بنجاح';
+            header("Location: umrah_hosts.php");
+            exit();
         } catch (PDOException $e) {
-            $error = 'لا يمكن حذف المستضيف لارتباطه بمعاملات أخرى.';
+            $_SESSION['error'] = 'لا يمكن حذف المستضيف لارتباطه بمعاملات أخرى.';
+            header("Location: umrah_hosts.php");
+            exit();
+        }
+    }
+}
+
+// معالجة تحويل مستضيف إلى ضامن
+if (isset($_GET['convert_to_guarantor'])) {
+    if (has_permission('umrah_create')) {
+        try {
+            $host_id = intval($_GET['convert_to_guarantor']);
+
+            // جلب بيانات المستضيف
+            $stmt = $pdo->prepare('SELECT * FROM umrah_hosts WHERE id = ?');
+            $stmt->execute([$host_id]);
+            $host = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$host) {
+                $_SESSION['error'] = 'المستضيف غير موجود.';
+                header("Location: umrah_hosts.php");
+                exit();
+            } else {
+                // التحقق من أن هذا المستضيف لم يتم تحويله من قبل
+                $check = $pdo->prepare('SELECT id FROM umrah_guarantors WHERE guarantor_name = ? AND phone = ? AND (agent_id = ? OR branch_id = ?)');
+                $check->execute([$host['host_name'], $host['phone'], $host['agent_id'], $host['branch_id']]);
+                if ($check->fetch()) {
+                    $_SESSION['error'] = 'هذا المستضيف تم تحويله إلى ضامن من قبل.';
+                    header("Location: umrah_hosts.php");
+                    exit();
+                } else {
+                    // نسخ الصور (إذا وجدت)
+                    $id_image_front = $host['iqama_image'];
+                    $id_image_back = $host['national_address_image'];
+
+                    // إدراج الضامن الجديد
+                    $stmt = $pdo->prepare('INSERT INTO umrah_guarantors (guarantor_name, identity_number, identity_type, phone, address, guarantor_type, id_image_front, id_image_back, agent_id, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                    $stmt->execute([
+                        $host['host_name'],
+                        '', // رقم الهوية (سيتم إضافته لاحقاً)
+                        'إقامة', // نوع الهوية الافتراضي
+                        $host['phone'],
+                        $host['address'],
+                        'individual',
+                        $id_image_front,
+                        $id_image_back,
+                        $host['agent_id'],
+                        $host['branch_id']
+                    ]);
+
+                    $_SESSION['success'] = 'تم تحويل المستضيف إلى ضامن بنجاح! يمكنك العثور عليه في <a href="umrah_guarantors.php" class="alert-link">صفحة الضامنين</a>.';
+                    header("Location: umrah_hosts.php");
+                    exit();
+                }
+            }
+        } catch (PDOException $e) {
+            $_SESSION['error'] = 'حدث خطأ أثناء التحويل: ' . $e->getMessage();
+            header("Location: umrah_hosts.php");
+            exit();
         }
     }
 }
 
 // تصفية البيانات حسب الصلاحيات
 $filter = get_entity_filter('h', 'branch_id', 'agent_id', 'employee_id', null);
-$sql = "SELECT h.*, a.agent_name, b.branch_name, 
-        (SELECT COUNT(*) FROM umrah_details WHERE host_id = h.id) as muatamer_count 
-        FROM umrah_hosts h 
+$sql = "SELECT h.*, a.agent_name, b.branch_name,
+        (SELECT COUNT(*) FROM passports WHERE host_id = h.id AND transaction_type = 'umrah' AND deleted_at IS NULL) as muatamer_count
+        FROM umrah_hosts h
         LEFT JOIN agents a ON h.agent_id = a.id
         LEFT JOIN branches b ON h.branch_id = b.id
         WHERE {$filter['clause']}
@@ -138,11 +228,19 @@ $hosts = $stmt->fetchAll();
         <?php endif; ?>
     </div>
 
-    <?php if (isset($_GET['success'])): ?>
-    <div class="alert alert-success">تمت العملية بنجاح.</div>
+    <?php if (!empty($_SESSION['success'])): ?>
+        <div class="alert alert-success alert-dismissible fade show rounded-4 border-0 shadow-sm mb-4" role="alert">
+            <i class="fas fa-check-circle me-2"></i>
+            <?php echo $_SESSION['success']; unset($_SESSION['success']); ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
     <?php endif; ?>
-    <?php if (isset($error)): ?>
-    <div class="alert alert-danger"><?php echo $error; ?></div>
+    <?php if (!empty($_SESSION['error'])): ?>
+        <div class="alert alert-danger alert-dismissible fade show rounded-4 border-0 shadow-sm mb-4" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i>
+            <?php echo htmlspecialchars((string)$_SESSION['error']); unset($_SESSION['error']); ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
     <?php endif; ?>
 
     <div class="card shadow-sm border-0 rounded-3">
@@ -179,32 +277,44 @@ $hosts = $stmt->fetchAll();
                                     <a href="../assets/uploads/umrah/<?php echo $host['national_address_image']; ?>" target="_blank" class="btn btn-sm btn-outline-success" title="العنوان الوطني"><i class="fas fa-map-marked-alt"></i></a>
                                 <?php endif; ?>
                             </td>
-                            <td><span class="badge bg-primary rounded-pill"><?php echo $host['muatamer_count']; ?></span></td>
+                            <td>
+                                <?php
+                                $current = $host['muatamer_count'];
+                                ?>
+                                <span class="badge bg-primary rounded-pill">
+                                    <?php echo $current; ?>
+                                </span>
+                            </td>
                             <td class="text-center">
-                                <button class="btn btn-sm btn-outline-success view-btn" 
-                                        data-id="<?php echo $host['id']; ?>" 
-                                        data-name="<?php echo htmlspecialchars($host['host_name']); ?>" 
-                                        data-phone="<?php echo htmlspecialchars($host['phone']); ?>" 
-                                        data-address="<?php echo htmlspecialchars($host['address']); ?>" 
-                                        data-iqama-img="<?php echo $host['iqama_image']; ?>" 
+                                <button class="btn btn-sm btn-outline-success view-btn"
+                                        data-id="<?php echo $host['id']; ?>"
+                                        data-name="<?php echo htmlspecialchars($host['host_name']); ?>"
+                                        data-phone="<?php echo htmlspecialchars($host['phone']); ?>"
+                                        data-address="<?php echo htmlspecialchars($host['address']); ?>"
+                                        data-iqama-img="<?php echo $host['iqama_image']; ?>"
                                         data-national-img="<?php echo $host['national_address_image']; ?>"
                                         data-owner="<?php echo htmlspecialchars($host['agent_name'] ?: ($host['branch_name'] ?: 'الإدارة العامة')); ?>"
                                         data-count="<?php echo $host['muatamer_count']; ?>">
                                     <i class="fas fa-eye"></i>
                                 </button>
+                                <?php if (has_permission('umrah_create')): ?>
+                                <button type="button" class="btn btn-sm btn-outline-warning convert-btn" data-id="<?php echo $host['id']; ?>" title="تحويل إلى ضامن">
+                                    <i class="fas fa-user-shield"></i>
+                                </button>
+                                <?php endif; ?>
                                 <?php if (has_permission('umrah_edit')): ?>
-                                <button class="btn btn-sm btn-outline-primary edit-btn" 
-                                        data-id="<?php echo $host['id']; ?>" 
-                                        data-name="<?php echo htmlspecialchars($host['host_name']); ?>" 
-                                        data-phone="<?php echo htmlspecialchars($host['phone']); ?>" 
-                                        data-address="<?php echo htmlspecialchars($host['address']); ?>" 
-                                        data-iqama-img="<?php echo $host['iqama_image']; ?>" 
+                                <button class="btn btn-sm btn-outline-primary edit-btn"
+                                        data-id="<?php echo $host['id']; ?>"
+                                        data-name="<?php echo htmlspecialchars($host['host_name']); ?>"
+                                        data-phone="<?php echo htmlspecialchars($host['phone']); ?>"
+                                        data-address="<?php echo htmlspecialchars($host['address']); ?>"
+                                        data-iqama-img="<?php echo $host['iqama_image']; ?>"
                                         data-national-img="<?php echo $host['national_address_image']; ?>">
                                     <i class="fas fa-edit"></i>
                                 </button>
                                 <?php endif; ?>
                                 <?php if (has_permission('umrah_delete')): ?>
-                                <a href="?delete=<?php echo $host['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('هل أنت متأكد؟')"><i class="fas fa-trash"></i></a>
+                                <button type="button" class="btn btn-sm btn-outline-danger delete-btn" data-id="<?php echo $host['id']; ?>"><i class="fas fa-trash"></i></button>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -226,6 +336,7 @@ $hosts = $stmt->fetchAll();
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" enctype="multipart/form-data">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header">
                     <h5 class="modal-title">إضافة مستضيف جديد</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -266,6 +377,7 @@ $hosts = $stmt->fetchAll();
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" enctype="multipart/form-data">
+                <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header">
                     <h5 class="modal-title">تعديل بيانات المستضيف</h5>
@@ -343,13 +455,13 @@ document.querySelectorAll('.edit-btn').forEach(btn => {
         document.getElementById('edit_name').value = this.dataset.name;
         document.getElementById('edit_phone').value = this.dataset.phone;
         document.getElementById('edit_address').value = this.dataset.address;
-        
+
         const iqamaImg = this.dataset.iqamaImg;
         const nationalImg = this.dataset.nationalImg;
-        
+
         document.getElementById('current_iqama_info').innerHTML = iqamaImg && iqamaImg !== 'null' ? `<a href="../assets/uploads/umrah/${iqamaImg}" target="_blank" class="text-info"><i class="fas fa-external-link-alt me-1"></i>عرض الصورة الحالية</a>` : '<span class="text-danger">لا توجد صورة مرفقة</span>';
         document.getElementById('current_national_info').innerHTML = nationalImg && nationalImg !== 'null' ? `<a href="../assets/uploads/umrah/${nationalImg}" target="_blank" class="text-info"><i class="fas fa-external-link-alt me-1"></i>عرض الصورة الحالية</a>` : '<span class="text-danger">لا توجد صورة مرفقة</span>';
-        
+
         new bootstrap.Modal(document.getElementById('editHostModal')).show();
     });
 });
@@ -361,18 +473,53 @@ document.querySelectorAll('.view-btn').forEach(btn => {
         document.getElementById('view_address').innerText = this.dataset.address || 'غير متوفر';
         document.getElementById('view_owner').innerText = this.dataset.owner;
         document.getElementById('view_count').innerText = this.dataset.count;
-        
+
         const iqamaImg = this.dataset.iqamaImg;
         const nationalImg = this.dataset.nationalImg;
         const basePath = '../assets/uploads/umrah/';
-        
+
         const viewIqama = document.getElementById('view_iqama_img');
         const viewNational = document.getElementById('view_national_img');
-        
+
         viewIqama.src = iqamaImg ? basePath + iqamaImg : 'https://via.placeholder.com/300x200.png?text=No+Image';
         viewNational.src = nationalImg ? basePath + nationalImg : 'https://via.placeholder.com/300x200.png?text=No+Image';
-        
+
         new bootstrap.Modal(document.getElementById('viewHostModal')).show();
+    });
+});
+
+// Handle convert and delete buttons with SweetAlert
+document.querySelectorAll('.convert-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        const id = this.dataset.id;
+        const isConfirmed = await window.Swal.fire({
+            title: 'تأكيد التحويل',
+            text: 'هل أنت متأكد من تحويل هذا المستضيف إلى ضامن؟',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'نعم، تحويل',
+            cancelButtonText: 'إلغاء'
+        });
+        if (isConfirmed.isConfirmed) {
+            window.location.href = `?convert_to_guarantor=${id}`;
+        }
+    });
+});
+
+document.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        const id = this.dataset.id;
+        const isConfirmed = await window.Swal.fire({
+            title: 'تأكيد الحذف',
+            text: 'هل أنت متأكد من حذف هذا المستضيف؟',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'نعم، احذف',
+            cancelButtonText: 'إلغاء'
+        });
+        if (isConfirmed.isConfirmed) {
+            window.location.href = `?delete=${id}`;
+        }
     });
 });
 </script>

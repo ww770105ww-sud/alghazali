@@ -1,7 +1,13 @@
 <IfModule mod_authz_core.c>
     Require all denied
+    <FilesMatch "^(apply_patch.*|precheck.*|verify.*|inspect.*|_check_perms|_preview_perms|fix_permissions_display_names|apply_umrah_workflow_schema)\.php$">
+        Require all granted
+    </FilesMatch>
 </IfModule>
 <IfModule !mod_authz_core.c>
     Order allow,deny
     Deny from all
+    <FilesMatch "^(apply_patch.*|precheck.*|verify.*|inspect.*|_check_perms|_preview_perms|fix_permissions_display_names|apply_umrah_workflow_schema)\.php$">
+        Allow from all
+    </FilesMatch>
 </IfModule>

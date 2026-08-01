@@ -13,6 +13,10 @@ if (!has_permission('manage_financial_accounts')) {
     exit();
 }
 
+if (isset($_GET['deactivate']) || isset($_GET['delete_permanent'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة وكيل جديد
 if (isset($_POST['add_agent_account'])) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -69,7 +73,7 @@ if (isset($_POST['add_agent_account'])) {
             $opening_balance_base = $opening_balance_for_base * $rate;
             
             $stmt_base_balance = $pdo->prepare("INSERT INTO account_balances_unified (account_id, branch_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
-            $stmt_base_balance->execute([$new_account_id, $branch_id, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
+            $stmt_base_balance->execute([$new_account_id, null, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
         }
 
         $pdo->commit();
@@ -121,9 +125,12 @@ if (isset($_POST['update_agent_account'])) {
     }
 }
 
-// تحويل إلى خامل
-if (isset($_GET['deactivate'])) {
-    $id = (int)$_GET['deactivate'];
+// تحويل إلى خامل عبر POST + CSRF
+if (isset($_POST['deactivate_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='agents.php';</script>");
+    }
+    $id = (int)$_POST['deactivate_account'];
     try {
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
         $stmt->execute([$id]);
@@ -134,9 +141,12 @@ if (isset($_GET['deactivate'])) {
     }
 }
 
-// حذف نهائي
-if (isset($_GET['delete_permanent'])) {
-    $id = (int)$_GET['delete_permanent'];
+// حذف نهائي عبر POST + CSRF
+if (isset($_POST['delete_account_permanent'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='agents.php';</script>");
+    }
+    $id = (int)$_POST['delete_account_permanent'];
     try {
         $pdo->beginTransaction();
         
@@ -201,10 +211,20 @@ $balances = [];
 if (!empty($agent_ids)) {
     $placeholders = implode(',', array_fill(0, count($agent_ids), '?'));
     $bal_stmt = $pdo->prepare("
-        SELECT ab.*, c.currency_name, c.currency_symbol 
-        FROM account_balances_unified ab 
-        JOIN currencies c ON ab.currency_id = c.id 
-        WHERE ab.account_id IN ($placeholders)
+        SELECT
+            jl.account_id,
+            jl.currency_id,
+            c.currency_name,
+            c.currency_symbol,
+            c.currency_code,
+            SUM(jl.debit - jl.credit) AS net_balance,
+            SUM((jl.debit - jl.credit) * COALESCE(c.exchange_rate, 1)) AS net_balance_base
+        FROM journal_lines jl
+        JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
+        LEFT JOIN currencies c ON jl.currency_id = c.id
+        WHERE ft.status = 'posted' AND jl.account_id IN ($placeholders)
+        GROUP BY jl.account_id, jl.currency_id, c.currency_name, c.currency_symbol, c.currency_code
+        ORDER BY jl.account_id ASC, c.currency_name ASC
     ");
     $bal_stmt->execute($agent_ids);
     while ($row = $bal_stmt->fetch()) {
@@ -218,7 +238,7 @@ if (!empty($agents)) {
     foreach ($agents as $a) {
         if (isset($balances[$a['id']])) {
             foreach ($balances[$a['id']] as $bal) {
-                $total_balance += (float)$bal['current_balance'];
+                $total_balance += (float)$bal['net_balance_base'];
                 if (!$currency_name) $currency_name = $bal['currency_name'];
             }
         }
@@ -315,7 +335,7 @@ $page_title = "إدارة الوكلاء";
                                 <?php 
                                 if (isset($balances[$agent['id']])) {
                                     foreach ($balances[$agent['id']] as $bal) {
-                                        echo '<div class="mb-1 small">' . format_account_balance($bal['current_balance'], $agent['normal_balance'], $bal['currency_name']) . '</div>';
+                                        echo '<div class="mb-1 small">' . format_account_balance($bal['net_balance'], $agent['normal_balance'], $bal['currency_name']) . '</div>';
                                     }
                                 } else {
                                     echo '<span class="text-muted small">0.00</span>';
@@ -336,14 +356,16 @@ $page_title = "إدارة الوكلاء";
                                             data-branch="<?php echo $agent['branch_id']; ?>"
                                             data-status="<?php echo $agent['account_status']; ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="agents.php?deactivate=<?php echo $agent['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من تحويل هذا الوكيل إلى خامل؟')"
-                                       title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></a>
-                                    <a href="agents.php?delete_permanent=<?php echo $agent['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا الوكيل نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')"
-                                       title="حذف نهائي"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من تحويل هذا الوكيل إلى خامل؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="deactivate_account" value="<?php echo $agent['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></button>
+                                    </form>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الوكيل نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_account_permanent" value="<?php echo $agent['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف نهائي"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>

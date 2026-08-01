@@ -8,6 +8,10 @@ if($user_role === 'editor' && !$settings['allow_editor_services']) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 $upload_dir = '../assets/uploads/services/';
 if (!is_dir($upload_dir)) {
     mkdir($upload_dir, 0777, true);
@@ -15,6 +19,9 @@ if (!is_dir($upload_dir)) {
 
 // إضافة خدمة جديدة
 if(isset($_POST['add_service'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='services.php';</script>");
+    }
     $service_image = '';
     if(!empty($_FILES['service_image']['name'])) {
         $service_image = time() . '_' . basename($_FILES['service_image']['name']);
@@ -24,10 +31,11 @@ if(isset($_POST['add_service'])) {
     $revenue_account_id = !empty($_POST['revenue_account_id']) ? (int)$_POST['revenue_account_id'] : null;
     $cost_account_id = !empty($_POST['cost_account_id']) ? (int)$_POST['cost_account_id'] : null;
     $profit_account_id = !empty($_POST['profit_account_id']) ? (int)$_POST['profit_account_id'] : null;
+    $service_type = !empty($_POST['service_type']) ? $_POST['service_type'] : null;
     
-    $stmt = $pdo->prepare("INSERT INTO services (service_name, service_image, price, currency_id, nights_count, hotel_name, makkah_days, madinah_days, quad_price, triple_price, double_price, print_terms, revenue_account_id, cost_account_id, profit_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt = $pdo->prepare("INSERT INTO services (service_name, service_type, service_image, price, currency_id, nights_count, hotel_name, makkah_days, madinah_days, quad_price, triple_price, double_price, print_terms, revenue_account_id, cost_account_id, profit_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([
-        $_POST['service_name'], $service_image, $_POST['price'], $_POST['currency_id'], $_POST['nights_count'], 
+        $_POST['service_name'], $service_type, $service_image, $_POST['price'], $_POST['currency_id'], $_POST['nights_count'], 
         $_POST['hotel_name'], $_POST['makkah_days'], $_POST['madinah_days'], 
         $_POST['quad_price'], $_POST['triple_price'], $_POST['double_price'],
         $_POST['print_terms'],
@@ -39,6 +47,9 @@ if(isset($_POST['add_service'])) {
 
 // تحديث خدمة
 if(isset($_POST['update_service'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='services.php';</script>");
+    }
     $service_id = $_POST['service_id'];
     $service_image = $_POST['current_image'];
 
@@ -50,15 +61,16 @@ if(isset($_POST['update_service'])) {
     $revenue_account_id = !empty($_POST['revenue_account_id']) ? (int)$_POST['revenue_account_id'] : null;
     $cost_account_id = !empty($_POST['cost_account_id']) ? (int)$_POST['cost_account_id'] : null;
     $profit_account_id = !empty($_POST['profit_account_id']) ? (int)$_POST['profit_account_id'] : null;
+    $service_type = !empty($_POST['service_type']) ? $_POST['service_type'] : null;
     
     $stmt = $pdo->prepare("UPDATE services SET 
-        service_name = ?, service_image = ?, price = ?, currency_id = ?, nights_count = ?, 
+        service_name = ?, service_type = ?, service_image = ?, price = ?, currency_id = ?, nights_count = ?, 
         hotel_name = ?, makkah_days = ?, madinah_days = ?, 
         quad_price = ?, triple_price = ?, double_price = ?, print_terms = ?,
         revenue_account_id = ?, cost_account_id = ?, profit_account_id = ? 
         WHERE id = ?");
     $stmt->execute([
-        $_POST['service_name'], $service_image, $_POST['price'], $_POST['currency_id'], $_POST['nights_count'], 
+        $_POST['service_name'], $service_type, $service_image, $_POST['price'], $_POST['currency_id'], $_POST['nights_count'], 
         $_POST['hotel_name'], $_POST['makkah_days'], $_POST['madinah_days'], 
         $_POST['quad_price'], $_POST['triple_price'], $_POST['double_price'],
         $_POST['print_terms'],
@@ -69,19 +81,38 @@ if(isset($_POST['update_service'])) {
     exit;
 }
 
-// حذف خدمة
-if(isset($_GET['delete'])) {
-    $id = (int)$_GET['delete'];
+// حذف خدمة عبر POST + CSRF
+if(isset($_POST['delete_service'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='services.php';</script>");
+    }
+    $id = (int)$_POST['delete_service'];
     $pdo->prepare("DELETE FROM services WHERE id = ?")->execute([$id]);
     header("Location: services.php?deleted=1");
     exit;
 }
 
 $services = $pdo->query("
-    SELECT s.*, c.currency_name, c.currency_code 
+    SELECT 
+        s.*, 
+        c.currency_name, c.currency_code,
+        r.account_code AS revenue_account_code, r.account_name_ar AS revenue_account_name,
+        co.account_code AS cost_account_code, co.account_name_ar AS cost_account_name,
+        p.account_code AS profit_account_code, p.account_name_ar AS profit_account_name
     FROM services s 
     LEFT JOIN currencies c ON s.currency_id = c.id 
+    LEFT JOIN unified_accounts r ON s.revenue_account_id = r.id
+    LEFT JOIN unified_accounts co ON s.cost_account_id = co.id
+    LEFT JOIN unified_accounts p ON s.profit_account_id = p.id
     ORDER BY s.created_at DESC
+")->fetchAll();
+
+// Fetch all passport transaction types to check links
+$passportTypes = $pdo->query("
+    SELECT pt.*, s.service_name 
+    FROM passport_transaction_types pt 
+    LEFT JOIN services s ON pt.service_id = s.id
+    ORDER BY pt.type_name ASC
 ")->fetchAll();
 
 $currencies = $pdo->query("SELECT * FROM currencies ORDER BY currency_name ASC")->fetchAll();
@@ -120,23 +151,39 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                             <th>اسم الخدمة</th>
                             <th>الشروط الخاصة</th>
                             <th>السعر</th>
-                            <th>الفندق</th>
-                            <th>الليالي</th>
+                            <th>أنواع المعاملات المرتبطة</th>
+                            <th>حساب الإيرادات</th>
+                            <th>حساب التكلفة</th>
+                            <th>حساب الأرباح</th>
                             <th class="text-center">الإجراءات</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if(empty($services)): ?>
-                            <tr><td colspan="6" class="text-center py-5 text-muted">لا توجد خدمات مضافة حالياً.</td></tr>
+                            <tr><td colspan="9" class="text-center py-5 text-muted">لا توجد خدمات مضافة حالياً.</td></tr>
                         <?php endif; ?>
                         <?php foreach($services as $s): ?>
                         <tr>
                             <td class="px-4 py-3">
                                 <?php if($s['service_image']): ?>
-                                    <img src="../assets/uploads/services/<?php echo $s['service_image']; ?>" class="rounded-3 border shadow-sm" width="60" height="45" style="object-fit: cover;">
+                                    <img src="../assets/uploads/services/<?php echo htmlspecialchars($s['service_image']); ?>" class="rounded-3 border shadow-sm" width="80" height="60" style="object-fit: cover; cursor: pointer;" data-bs-toggle="modal" data-bs-target="#viewImageModal<?php echo $s['id']; ?>">
+                                    <!-- Modal عرض الصورة -->
+                                    <div class="modal fade" id="viewImageModal<?php echo $s['id']; ?>" tabindex="-1">
+                                        <div class="modal-dialog modal-dialog-centered">
+                                            <div class="modal-content border-0 shadow">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title"><?php echo htmlspecialchars($s['service_name']); ?></h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                                </div>
+                                                <div class="modal-body text-center">
+                                                    <img src="../assets/uploads/services/<?php echo htmlspecialchars($s['service_image']); ?>" class="img-fluid rounded-3" style="max-width: 100%; max-height: 70vh;">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 <?php else: ?>
-                                    <div class="bg-light rounded-3 d-flex align-items-center justify-content-center text-muted" style="width: 60px; height: 45px;">
-                                        <i class="fas fa-image"></i>
+                                    <div class="bg-light rounded-3 d-flex align-items-center justify-content-center text-muted" style="width: 80px; height: 60px;">
+                                        <i class="fas fa-image fa-2x"></i>
                                     </div>
                                 <?php endif; ?>
                             </td>
@@ -152,19 +199,63 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                                     <small class="text-muted"><?php echo $s['currency_code']; ?></small>
                                 </span>
                             </td>
-                            <td><?php echo $s['hotel_name'] ?: '<span class="text-muted small">غير محدد</span>'; ?></td>
                             <td>
-                                <span class="badge bg-info bg-opacity-10 text-info px-3">
-                                    <?php echo $s['nights_count'] ?: 0; ?> ليلة
-                                </span>
+                                <?php 
+                                // Find all passport transaction types linked to this service
+                                $linkedTypes = array_filter($passportTypes, function($pt) use ($s) {
+                                    return $pt['service_id'] == $s['id'];
+                                });
+                                if(!empty($linkedTypes)):
+                                    foreach($linkedTypes as $pt):
+                                ?>
+                                    <span class="badge bg-primary bg-opacity-10 text-primary px-2 py-1 rounded-pill me-1 mb-1 d-inline-block">
+                                        <?php echo $pt['type_name']; ?>
+                                    </span>
+                                <?php 
+                                    endforeach;
+                                else:
+                                ?>
+                                    <span class="text-muted small opacity-50">لا توجد</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if($s['revenue_account_code'] && $s['revenue_account_name']): ?>
+                                    <span class="badge bg-success bg-opacity-10 text-success px-2 py-1 rounded-pill">
+                                        <?php echo $s['revenue_account_code']; ?> - <?php echo $s['revenue_account_name']; ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span class="text-muted small opacity-50">غير محدد</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if($s['cost_account_code'] && $s['cost_account_name']): ?>
+                                    <span class="badge bg-danger bg-opacity-10 text-danger px-2 py-1 rounded-pill">
+                                        <?php echo $s['cost_account_code']; ?> - <?php echo $s['cost_account_name']; ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span class="text-muted small opacity-50">غير محدد</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if($s['profit_account_code'] && $s['profit_account_name']): ?>
+                                    <span class="badge bg-warning bg-opacity-10 text-warning px-2 py-1 rounded-pill">
+                                        <?php echo $s['profit_account_code']; ?> - <?php echo $s['profit_account_name']; ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span class="text-muted small opacity-50">غير محدد</span>
+                                <?php endif; ?>
                             </td>
                             <td class="text-center">
                                 <button class="btn btn-sm btn-outline-primary rounded-pill px-3 me-1" data-bs-toggle="modal" data-bs-target="#editServiceModal<?php echo $s['id']; ?>">
                                     <i class="fas fa-edit me-1"></i> تعديل
                                 </button>
-                                <a href="?delete=<?php echo $s['id']; ?>" class="btn btn-sm btn-outline-danger rounded-pill px-3" onclick="return confirm('هل أنت متأكد من حذف هذه الخدمة؟')">
-                                    <i class="fas fa-trash me-1"></i> حذف
-                                </a>
+                                <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذه الخدمة؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="delete_service" value="<?php echo $s['id']; ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-3">
+                                        <i class="fas fa-trash me-1"></i> حذف
+                                    </button>
+                                </form>
                             </td>
                         </tr>
 
@@ -173,6 +264,7 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                             <div class="modal-dialog modal-lg">
                                 <div class="modal-content border-0 shadow">
                                     <form method="POST" enctype="multipart/form-data">
+                                        <?php echo csrf_input(); ?>
                                         <div class="modal-header bg-primary text-white py-3">
                                             <h5 class="modal-title"><i class="fas fa-edit me-2"></i> تعديل الخدمة: <?php echo $s['service_name']; ?></h5>
                                             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -184,6 +276,19 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                                                 <div class="col-md-6 mb-3">
                                                     <label class="form-label fw-bold">اسم الخدمة</label>
                                                     <input type="text" name="service_name" class="form-control" value="<?php echo $s['service_name']; ?>" required>
+                                                </div>
+                                                <div class="col-md-6 mb-3">
+                                                    <label class="form-label fw-bold">نوع الخدمة</label>
+                                                    <select name="service_type" id="edit_service_type_<?php echo $s['id']; ?>" class="form-select" onchange="autoFillTerms('edit_<?php echo $s['id']; ?>')">
+                                                        <option value="">اختر نوع الخدمة</option>
+                                                        <option value="umrah" <?php echo ($s['service_type'] ?? '') === 'umrah' ? 'selected' : ''; ?>>الحج والعمرة</option>
+                                                        <option value="bus_flight" <?php echo ($s['service_type'] ?? '') === 'bus_flight' ? 'selected' : ''; ?>>حجوزات تذاكر طيران وبصات</option>
+                                                        <option value="work_visa" <?php echo ($s['service_type'] ?? '') === 'work_visa' ? 'selected' : ''; ?>>تأشيرة العمل</option>
+                                                        <option value="family_visit" <?php echo ($s['service_type'] ?? '') === 'family_visit' ? 'selected' : ''; ?>>زيارة عائلية</option>
+                                                        <option value="postal" <?php echo ($s['service_type'] ?? '') === 'postal' ? 'selected' : ''; ?>>خدمات البريد</option>
+                                                        <option value="passport" <?php echo ($s['service_type'] ?? '') === 'passport' ? 'selected' : ''; ?>>جوازات السفر</option>
+                                                        <option value="general" <?php echo ($s['service_type'] ?? '') === 'general' ? 'selected' : ''; ?>>عام</option>
+                                                    </select>
                                                 </div>
                                                 <div class="col-md-3 mb-3">
                                                     <label class="form-label fw-bold">السعر الأساسي</label>
@@ -236,7 +341,7 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                                                 </div>
                                                 <div class="col-12 mb-3">
                                                     <label class="form-label fw-bold">شروط وأحكام خاصة بهذه الخدمة (تظهر في السند)</label>
-                                                    <textarea name="print_terms" class="form-control" rows="4" placeholder="مثال لفيزا العمل: المكتب غير مسؤول عن الرفض الطبي..."><?php echo htmlspecialchars($s['print_terms'] ?? ''); ?></textarea>
+                                                    <textarea id="edit_print_terms_<?php echo $s['id']; ?>" name="print_terms" class="form-control" rows="4" placeholder="مثال لفيزا العمل: المكتب غير مسؤول عن الرفض الطبي..."><?php echo htmlspecialchars($s['print_terms'] ?? ''); ?></textarea>
                                                     <div class="form-text small text-primary"><i class="fas fa-info-circle me-1"></i> هذه الشروط ستظهر في الجزء الجانبي من سند القبض عند اختيار هذه الخدمة.</div>
                                                 </div>
                                                 <hr>
@@ -296,6 +401,7 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
     <div class="modal-dialog modal-lg">
         <div class="modal-content border-0 shadow">
             <form method="POST" enctype="multipart/form-data">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white py-3">
                     <h5 class="modal-title"><i class="fas fa-plus-circle me-2"></i> إضافة برنامج عمرة / خدمة جديدة</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -305,6 +411,19 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold">اسم الخدمة</label>
                             <input type="text" name="service_name" class="form-control" placeholder="أدخل اسم البرنامج أو الخدمة" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">نوع الخدمة</label>
+                            <select name="service_type" id="add_service_type" class="form-select" onchange="autoFillTerms('add')">
+                                <option value="">اختر نوع الخدمة</option>
+                                <option value="umrah">الحج والعمرة</option>
+                                <option value="bus_flight">حجوزات تذاكر طيران وبصات</option>
+                                <option value="work_visa">تأشيرة العمل</option>
+                                <option value="family_visit">زيارة عائلية</option>
+                                <option value="postal">خدمات البريد</option>
+                                <option value="passport">جوازات السفر</option>
+                                <option value="general">عام</option>
+                            </select>
                         </div>
                         <div class="col-md-3 mb-3">
                             <label class="form-label fw-bold">السعر الأساسي</label>
@@ -356,7 +475,7 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
                         </div>
                         <div class="col-12 mb-3">
                             <label class="form-label fw-bold">شروط وأحكام خاصة بهذه الخدمة (تظهر في السند)</label>
-                            <textarea name="print_terms" class="form-control" rows="4" placeholder="اكتب الشروط الخاصة بهذه الخدمة ليتم طباعتها في السند..."></textarea>
+                            <textarea id="add_print_terms" name="print_terms" class="form-control" rows="4" placeholder="اكتب الشروط الخاصة بهذه الخدمة ليتم طباعتها في السند..."></textarea>
                             <div class="form-text small text-primary"><i class="fas fa-info-circle me-1"></i> هذه الشروط خاصة بكل خدمة على حدة وتظهر في المساحة الجانبية للسند.</div>
                         </div>
                         <hr>
@@ -403,5 +522,32 @@ $accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_a
         </div>
     </div>
 </div>
+
+<script>
+const serviceTerms = {
+    'umrah': <?php echo json_encode($settings['umrah_service_terms'] ?? ''); ?>,
+    'bus_flight': <?php echo json_encode($settings['bus_flight_service_terms'] ?? ''); ?>,
+    'work_visa': <?php echo json_encode($settings['work_visa_service_terms'] ?? ''); ?>,
+    'family_visit': <?php echo json_encode($settings['family_visit_service_terms'] ?? ''); ?>,
+    'passport': <?php echo json_encode($settings['passport_service_terms'] ?? ''); ?>,
+    'general': ''
+};
+
+function autoFillTerms(prefix) {
+    let typeSelect, termsTextarea;
+    if (prefix === 'add') {
+        typeSelect = document.getElementById('add_service_type');
+        termsTextarea = document.getElementById('add_print_terms');
+    } else {
+        // For edit modals, prefix is 'edit_{service_id}'
+        const serviceId = prefix.replace('edit_', '');
+        typeSelect = document.getElementById('edit_service_type_' + serviceId);
+        termsTextarea = document.getElementById('edit_print_terms_' + serviceId);
+    }
+    if (typeSelect && termsTextarea) {
+        termsTextarea.value = serviceTerms[typeSelect.value] || '';
+    }
+}
+</script>
 
 <?php require_once 'footer.php'; ?>

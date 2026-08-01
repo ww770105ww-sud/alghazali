@@ -13,8 +13,15 @@ if (!has_permission('manage_expenses')) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة حساب مصروفات
 if (isset($_POST['add_expense_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_expenses.php';</script>");
+    }
     $account_name = $_POST['account_name'];
     $parent_id = $_POST['parent_id'];
     $opening_balance = $_POST['opening_balance'] ?? 0;
@@ -65,6 +72,9 @@ if (isset($_POST['add_expense_account'])) {
 
 // تحديث حساب مصروفات
 if (isset($_POST['update_expense_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_expenses.php';</script>");
+    }
     $id = $_POST['id'];
     $account_name = $_POST['account_name'];
     $new_status = $_POST['status'];
@@ -99,9 +109,12 @@ if (isset($_POST['update_expense_account'])) {
     }
 }
 
-// حذف حساب مصروفات
-if (isset($_GET['delete'])) {
-    $id = $_GET['delete'];
+// حذف حساب مصروفات عبر POST + CSRF
+if (isset($_POST['delete_expense_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_expenses.php';</script>");
+    }
+    $id = (int)$_POST['delete_expense_account'];
     try {
         $pdo->beginTransaction();
         
@@ -272,10 +285,11 @@ $page_title = "إدارة الحسابات المصروفة";
                                             data-name="<?php echo htmlspecialchars($exp['account_name_ar']); ?>"
                                             data-status="<?php echo $exp['account_status']; ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="manage_expenses.php?delete=<?php echo $exp['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا الحساب المصروفات؟')"
-                                       title="حذف"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الحساب المصروفات؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_expense_account" value="<?php echo $exp['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -297,6 +311,7 @@ $page_title = "إدارة الحسابات المصروفة";
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة حساب مصروفات جديد</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -354,6 +369,7 @@ $page_title = "إدارة الحسابات المصروفة";
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header bg-warning text-dark border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل معلومات الحساب</h5>

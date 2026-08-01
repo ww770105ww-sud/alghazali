@@ -77,7 +77,7 @@ if (isset($_POST['update_invoice'])) {
         $pdo->beginTransaction();
 
         // البيانات المشتركة
-        $invoice_date = $_POST['invoice_date'] ?? $main_inv['invoice_date'];
+        $invoice_date = normalize_datetime_db($_POST['invoice_date'] ?? $main_inv['invoice_date']);
         $branch_id = $_POST['branch_id'] ?? $main_inv['branch_id'];
         $source_type = $_POST['source_type'] ?? $main_inv['source_type'];
         $description = $_POST['description'] ?? $main_inv['description'];
@@ -303,7 +303,7 @@ $pur_account_id = $pur_inv['account_id'] ?? null;
                     <!-- البيانات الأساسية -->
                     <div class="col-md-6">
                         <label class="form-label fw-bold">تاريخ الفاتورة</label>
-                        <input type="date" name="invoice_date" class="form-control rounded-3" value="<?php echo $main_inv['invoice_date']; ?>" required <?php echo $has_posted ? 'disabled' : ''; ?>>
+                        <input type="datetime-local" name="invoice_date" class="form-control rounded-3" value="<?php echo h(format_datetime_local_value($main_inv['invoice_date'])); ?>" required <?php echo $has_posted ? 'disabled' : ''; ?>>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label fw-bold">الفرع المسؤول</label>

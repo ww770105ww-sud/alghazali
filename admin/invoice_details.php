@@ -58,7 +58,15 @@ function getServiceDetails($pdo, $type, $id)
 {
     if (empty($id)) return null;
 
-    if ($type == 'Passport' || $type == 'umrah' || $type == 'FamilyVisit' || $type == 'passport_transaction') {
+    if (
+        $type == 'Passport'
+        || $type == 'umrah'
+        || $type == 'hajj'
+        || is_umrah_service($type)
+        || is_hajj_service($type)
+        || $type == 'FamilyVisit'
+        || $type == 'passport_transaction'
+    ) {
         $stmt = $pdo->prepare("SELECT full_name, passport_number FROM passport_transactions WHERE id = ?");
         $stmt->execute([$id]);
         $res = $stmt->fetch();
@@ -72,6 +80,15 @@ function getServiceDetails($pdo, $type, $id)
         return $res;
     } elseif ($type === 'تذاكر طيران وبصات') {
         $stmt = $pdo->prepare("SELECT traveler_name as full_name, booking_number as passport_number FROM bus_flight_bookings WHERE id = ?");
+        $stmt->execute([$id]);
+        return $stmt->fetch();
+    } elseif (is_postal_service($type) || $type === 'postal') {
+        $stmt = $pdo->prepare("
+            SELECT CONCAT(sender_full_name, ' -> ', recipient_full_name) AS full_name,
+                   tracking_number AS passport_number
+            FROM postal_shipments
+            WHERE id = ?
+        ");
         $stmt->execute([$id]);
         return $stmt->fetch();
     }
@@ -401,20 +418,46 @@ function getJournalEntryDetails($pdo, $sale_id, $pur_id)
 
 $journal_details = getJournalEntryDetails($pdo, $sale_inv['id'] ?? 0, $pur_inv['id'] ?? 0);
 
+function normalize_account_type($value)
+{
+    $value = trim((string)$value);
+    if ($value === '') return '';
+
+    $low = mb_strtolower($value, 'UTF-8');
+    $map = [
+        'revenue' => ['revenue', 'income', 'إيراد', 'ايراد', 'إيرادات', 'ايرادات'],
+        'expense' => ['expense', 'cost', 'مصروف', 'مصروفات', 'تكلفة', 'تكاليف'],
+        'box' => ['box', 'cash', 'صندوق', 'نقد'],
+        'bank' => ['bank', 'بنك'],
+        'receivable' => ['receivable', 'ar', 'العملاء', 'ذمم مدينة'],
+        'payable' => ['payable', 'ap', 'الموردين', 'ذمم دائنة'],
+    ];
+
+    foreach ($map as $normalized => $aliases) {
+        foreach ($aliases as $alias) {
+            if (mb_strtolower((string)$alias, 'UTF-8') === $low) {
+                return $normalized;
+            }
+        }
+    }
+    return $value;
+}
+
 // حساب المجاميع
 $revenue_accounts = array_filter($journal_details, function ($j) {
-    return $j['account_type'] == 'revenue';
+    return normalize_account_type($j['account_type'] ?? '') === 'revenue';
 });
 $cost_accounts = array_filter($journal_details, function ($j) {
-    return $j['account_type'] == 'expense';
+    return normalize_account_type($j['account_type'] ?? '') === 'expense';
 });
 $profit_accounts = array_filter($journal_details, function ($j) {
     // Look for accounts with "أرباح" in the name, or use the service's profit account
     // Alternatively, just get any revenue account that's not the main revenue account
-    return $j['account_type'] == 'revenue' && !empty($j['credit']);
+    return normalize_account_type($j['account_type'] ?? '') === 'revenue' && !empty($j['credit']);
 });
 $cash_accounts = array_filter($journal_details, function ($j) {
-    return $j['account_type'] == 'box' || $j['account_type'] == 'bank';
+    $t = normalize_account_type($j['account_type'] ?? '');
+    return $t === 'box' || $t === 'bank';
 });
 
 $total_revenue = array_sum(array_column($revenue_accounts, 'credit'));
@@ -460,9 +503,7 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
     <div class="d-flex justify-content-between align-items-center mb-4 no-print">
         <h3 class="fw-bold"><i class="fas fa-layer-group me-2 text-primary"></i> عرض تفاصيل العملية #<?php echo $numeric_suffix; ?></h3>
         <div>
-            <?php
-            $return_param = !empty($_GET['return_to']) ? '&return_to=' . urlencode($_GET['return_to']) : '';
-            if (($sale_inv && $sale_inv['invoice_status'] == 'posted') || ($pur_inv && $pur_inv['invoice_status'] == 'posted')): ?>
+            <?php if (($sale_inv && $sale_inv['invoice_status'] == 'posted') || ($pur_inv && $pur_inv['invoice_status'] == 'posted')): ?>
                 <div class="dropdown d-inline-block me-2">
                     <button class="btn btn-warning rounded-pill px-4 dropdown-toggle" type="button" data-bs-toggle="dropdown">
                         <i class="fas fa-undo me-2"></i> إلغاء الترحيل
@@ -470,16 +511,44 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                     <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
                         <li><h6 class="dropdown-header fw-bold">إعادة التعيين إلى مسودة</h6></li>
                         <?php if ($sale_inv && $sale_inv['invoice_status'] == 'posted' && $pur_inv && $pur_inv['invoice_status'] == 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?reset_invoice=<?php echo $main_inv['id']; ?>&reset_type=all<?php echo $return_param; ?>" onclick="return confirm('إلغاء ترحيل البيع والشراء معاً؟')"><i class="fas fa-sync me-2 text-danger"></i> إلغاء ترحيل الكل</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('إلغاء ترحيل البيع والشراء معاً؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $main_inv['id']; ?>">
+                                    <input type="hidden" name="reset_type" value="all">
+                                    <input type="hidden" name="linked_invoice_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-sync me-2 text-danger"></i> إلغاء ترحيل الكل</button>
+                                </form>
+                            </li>
                             <li><hr class="dropdown-divider"></li>
                         <?php endif; ?>
 
                         <?php if ($sale_inv && $sale_inv['invoice_status'] == 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?reset_invoice=<?php echo $sale_inv['id']; ?>&reset_type=sales<?php echo $return_param; ?>" onclick="return confirm('إلغاء ترحيل فاتورة البيع؟')"><i class="fas fa-undo me-2 text-warning"></i> إلغاء ترحيل البيع</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('إلغاء ترحيل فاتورة البيع؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $sale_inv['id']; ?>">
+                                    <input type="hidden" name="reset_type" value="sales">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-undo me-2 text-warning"></i> إلغاء ترحيل البيع</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
 
                         <?php if ($pur_inv && $pur_inv['invoice_status'] == 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?reset_invoice=<?php echo $pur_inv['id']; ?>&reset_type=purchase<?php echo $return_param; ?>" onclick="return confirm('إلغاء ترحيل فاتورة الشراء؟')"><i class="fas fa-history me-2 text-secondary"></i> إلغاء ترحيل الشراء</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('إلغاء ترحيل فاتورة الشراء؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="reset_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="reset_type" value="purchase">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-history me-2 text-secondary"></i> إلغاء ترحيل الشراء</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
                     </ul>
                 </div>
@@ -493,16 +562,42 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                     <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
                         <li><h6 class="dropdown-header fw-bold">ترحيل محاسبياً (Post)</h6></li>
                         <?php if ($sale_inv && $sale_inv['invoice_status'] != 'posted' && $pur_inv && $pur_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?post_all=<?php echo $main_inv['id']; ?><?php echo $return_param; ?>" onclick="return confirm('ترحيل البيع والشراء معاً؟')"><i class="fas fa-check-double me-2 text-success"></i> ترحيل الكل</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('ترحيل البيع والشراء معاً؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $main_inv['id']; ?>">
+                                    <input type="hidden" name="post_scope" value="all">
+                                    <input type="hidden" name="linked_invoice_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-check-double me-2 text-success"></i> ترحيل الكل</button>
+                                </form>
+                            </li>
                             <li><hr class="dropdown-divider"></li>
                         <?php endif; ?>
 
                         <?php if ($sale_inv && $sale_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?post_invoice=<?php echo $sale_inv['id']; ?><?php echo $return_param; ?>" onclick="return confirm('ترحيل فاتورة البيع؟')"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i> ترحيل البيع</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('ترحيل فاتورة البيع؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $sale_inv['id']; ?>">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i> ترحيل البيع</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
 
                         <?php if ($pur_inv && $pur_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?post_invoice=<?php echo $pur_inv['id']; ?><?php echo $return_param; ?>" onclick="return confirm('ترحيل فاتورة الشراء؟')"><i class="fas fa-file-invoice me-2 text-warning"></i> ترحيل الشراء</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('ترحيل فاتورة الشراء؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="post_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-file-invoice me-2 text-warning"></i> ترحيل الشراء</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
                     </ul>
                 </div>
@@ -516,16 +611,44 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                     <ul class="dropdown-menu dropdown-menu-end shadow-lg border-0">
                         <li><h6 class="dropdown-header fw-bold">حذف نهائي (Delete)</h6></li>
                         <?php if ($sale_inv && $sale_inv['invoice_status'] != 'posted' && $pur_inv && $pur_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2 text-danger" href="invoices.php?delete_invoice=<?php echo $sale_inv['id']; ?>&delete_both=<?php echo $pur_inv['id']; ?><?php echo $return_param; ?>" onclick="return confirm('حذف البيع والشراء معاً؟')"><i class="fas fa-trash-alt me-2"></i> حذف الكل</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('حذف البيع والشراء معاً؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $sale_inv['id']; ?>">
+                                    <input type="hidden" name="delete_scope" value="both">
+                                    <input type="hidden" name="linked_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2 text-danger"><i class="fas fa-trash-alt me-2"></i> حذف الكل</button>
+                                </form>
+                            </li>
                             <li><hr class="dropdown-divider"></li>
                         <?php endif; ?>
 
                         <?php if ($sale_inv && $sale_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?delete_invoice=<?php echo $sale_inv['id']; ?>&confirm_linked=1<?php echo $return_param; ?>" onclick="return confirm('حذف فاتورة البيع؟')"><i class="fas fa-trash me-2"></i> حذف البيع</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('حذف فاتورة البيع؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $sale_inv['id']; ?>">
+                                    <input type="hidden" name="delete_scope" value="self">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-trash me-2"></i> حذف البيع</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
 
                         <?php if ($pur_inv && $pur_inv['invoice_status'] != 'posted'): ?>
-                            <li><a class="dropdown-item py-2" href="invoices.php?delete_invoice=<?php echo $pur_inv['id']; ?>&confirm_linked=1<?php echo $return_param; ?>" onclick="return confirm('حذف فاتورة الشراء؟')"><i class="fas fa-trash me-2 text-warning"></i> حذف الشراء</a></li>
+                            <li>
+                                <form method="post" action="invoices.php" class="mb-0" onsubmit="return confirm('حذف فاتورة الشراء؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="invoice_action" value="delete_invoice">
+                                    <input type="hidden" name="invoice_id" value="<?php echo $pur_inv['id']; ?>">
+                                    <input type="hidden" name="delete_scope" value="self">
+                                    <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($return_to); ?>">
+                                    <button type="submit" class="dropdown-item py-2"><i class="fas fa-trash me-2 text-warning"></i> حذف الشراء</button>
+                                </form>
+                            </li>
                         <?php endif; ?>
                     </ul>
                 </div>
@@ -551,7 +674,7 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                                 else echo $stype;
                             ?>
                         </span>
-                        <div class="mt-2 small text-muted"><?php echo $main_inv['invoice_date']; ?></div>
+                        <div class="mt-2 small text-muted"><?php echo h(format_datetime_display($main_inv['invoice_date'])); ?></div>
                     </div>
                 </div>
 
@@ -658,7 +781,7 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                             <div class="card-header bg-light py-3 border-0 d-flex justify-content-between align-items-center">
                                 <h6 class="mb-0 fw-bold">
                                     رقم القيد: <span class="badge bg-primary rounded-pill px-3"><?php echo $trx_num; ?></span>
-                                    <span class="ms-3 text-muted small"><i class="far fa-calendar-alt me-1"></i><?php echo $lines[0]['transaction_date']; ?></span>
+                                    <span class="ms-3 text-muted small"><i class="far fa-calendar-alt me-1"></i><?php echo h(format_datetime_display($lines[0]['transaction_date'])); ?></span>
                                 </h6>
                                 <div class="small fw-bold">
                                     الحالة: <span class="text-success"><i class="fas fa-check-circle me-1"></i>مرحل</span>
@@ -684,7 +807,8 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                                                     </td>
                                                     <td class="text-center">
                                                         <?php
-                                                        $badge_color = match ($jd['account_type']) {
+                                                        $normalizedAccountType = normalize_account_type($jd['account_type'] ?? '');
+                                                        $badge_color = match ($normalizedAccountType) {
                                                             'revenue' => 'success',
                                                             'expense' => 'danger',
                                                             'box', 'bank' => 'info',
@@ -692,7 +816,7 @@ $currencies_list = $pdo->query("SELECT id, currency_name, currency_symbol, excha
                                                             'payable' => 'warning',
                                                             default => 'secondary'
                                                         };
-                                                        $type_label = match ($jd['account_type']) {
+                                                        $type_label = match ($normalizedAccountType) {
                                                             'revenue' => 'إيراد',
                                                             'expense' => 'تكلفة',
                                                             'box' => 'صندوق',

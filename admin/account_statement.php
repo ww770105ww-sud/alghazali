@@ -40,7 +40,11 @@ $stmt_accounts = $pdo->query("SELECT id, account_code, account_name_ar, parent_i
 $all_accounts = $stmt_accounts->fetchAll();
 
 $accounts = [];
-build_flat_tree($all_accounts, null, 0, $accounts);
+// Instead of build_flat_tree, let's just format the accounts with display_name
+foreach ($all_accounts as $acc) {
+    $acc['display_name'] = $acc['account_code'] . ' - ' . $acc['account_name_ar'];
+    $accounts[] = $acc;
+}
 
 // جلب العملات
 $stmt_currencies = $pdo->query("SELECT id, currency_name, currency_code, currency_symbol FROM currencies WHERE is_active = 1 ORDER BY is_default DESC, currency_name ASC");
@@ -86,7 +90,7 @@ if ($account_id && $currency_id) {
             JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
             WHERE jl.account_id = ?
               AND ft.transaction_date < ?
-              AND ft.status = 'posted'
+              AND ft.status IN ('posted', 'reversed')
         ";
 
         $opening_params = [$account_id, $date_from];
@@ -132,7 +136,7 @@ if ($account_id && $currency_id) {
         LEFT JOIN currencies cur ON jl.currency_id = cur.id
         LEFT JOIN invoices i ON (ft.transaction_number = i.invoice_number OR ft.reference_number = i.invoice_number OR (ft.reference_id = i.id AND ft.reference_type = 'invoice'))
         LEFT JOIN currency_exchange_transactions cet ON ft.transaction_number = cet.transaction_number
-        WHERE ft.status = 'posted'
+        WHERE ft.status IN ('posted', 'reversed')
         GROUP BY ft.id, ft.transaction_date, ft.transaction_type, ft.transaction_number, ft.reference_number, ft.description, ft.reference_type, ft.status, ft.created_at, cur.currency_code, cur.currency_name, cur.currency_symbol, cet.transaction_number, cet.notes
     ";
 
@@ -175,7 +179,7 @@ if ($account_id && $currency_id) {
         JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
         LEFT JOIN currencies c ON jl.currency_id = c.id
         WHERE jl.account_id = ?
-          AND ft.status = 'posted'
+          AND ft.status IN ('posted', 'reversed')
     ";
     $summary_params = [$account_id];
     if ($document_type_filter != 'all') {
@@ -266,7 +270,7 @@ if ($account_id && $currency_id) {
         $key = $ao['currency_symbol'] . '|' . $ao['currency_name'];
 
         // حساب الرصيد الحالي الحقيقي بناءً على الحركات الفعلية لضمان الدقة
-        $stmt_actual = $pdo->prepare("SELECT SUM(debit - credit) FROM journal_lines jl JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id WHERE jl.account_id = ? AND jl.currency_id = ? AND ft.status = 'posted'");
+        $stmt_actual = $pdo->prepare("SELECT SUM(debit - credit) FROM journal_lines jl JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id WHERE jl.account_id = ? AND jl.currency_id = ? AND ft.status IN ('posted', 'reversed')");
         $stmt_actual->execute([$account_id, $ao['currency_id']]);
         $actual_net_movement = (float)$stmt_actual->fetchColumn();
 
@@ -302,7 +306,7 @@ if ($account_id && $currency_id) {
             $name = $jc['currency_name'] ?? 'Currency ' . $currency_id_jl;
             $key = $symbol . '|' . $name;
             
-            $stmt_actual = $pdo->prepare("SELECT SUM(debit - credit) FROM journal_lines jl JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id WHERE jl.account_id = ? AND jl.currency_id = ? AND ft.status = 'posted'");
+            $stmt_actual = $pdo->prepare("SELECT SUM(debit - credit) FROM journal_lines jl JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id WHERE jl.account_id = ? AND jl.currency_id = ? AND ft.status IN ('posted', 'reversed')");
             $stmt_actual->execute([$account_id, $currency_id_jl]);
             $actual_net_movement = (float)$stmt_actual->fetchColumn();
             
@@ -356,7 +360,7 @@ if ($account_id && $currency_id) {
         FROM journal_lines jl
         JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
         LEFT JOIN currencies c ON jl.currency_id = c.id
-        WHERE jl.account_id = ? AND ft.status = 'posted'
+        WHERE jl.account_id = ? AND ft.status IN ('posted', 'reversed')
     ");
     $stmt_db_net->execute([$account_id]);
     $db_unified_net_balance = (float)($stmt_db_net->fetchColumn() ?: 0);
@@ -1457,7 +1461,8 @@ $currencies = $pdo->query("SELECT id, currency_name, currency_symbol FROM curren
         }
 
         $.post('ajax/delete_voucher.php', {
-            id: id
+            id: id,
+            csrf_token: '<?php echo $_SESSION['csrf_token']; ?>'
         }, function(res) {
             if (res.success) {
                 location.reload();

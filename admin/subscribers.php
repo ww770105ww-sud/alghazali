@@ -8,15 +8,25 @@ if($user_role === 'editor' && !$settings['allow_editor_subscribers']) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات المباشرة عبر الرابط. استخدم أزرار الصفحة المحمية فقط.";
+}
+
 // معالجة الحذف
-if(isset($_GET['delete'])) {
+if(isset($_POST['delete_subscriber'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='subscribers.php';</script>");
+    }
     $stmt = $pdo->prepare("DELETE FROM subscribers WHERE id = ?");
-    $stmt->execute([$_GET['delete']]);
+    $stmt->execute([(int)$_POST['delete_subscriber']]);
     echo "<script>window.location.href='subscribers.php?status=deleted';</script>";
     exit;
 }
 
 if(isset($_POST['send_email'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='subscribers.php';</script>");
+    }
     $subject = $_POST['subject'];
     $message = $_POST['message'];
     $subscribers_list = $pdo->query("SELECT email FROM subscribers")->fetchAll();
@@ -52,6 +62,12 @@ $subscribers = $pdo->query("SELECT * FROM subscribers ORDER BY created_at DESC")
     <?php if(isset($_GET['status']) && $_GET['status'] == 'deleted'): ?>
         <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm mb-4" role="alert">
             <i class="fas fa-check-circle me-2"></i> تم حذف المشترك بنجاح.
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    <?php endif; ?>
+    <?php if(isset($error)): ?>
+        <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm mb-4" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i> <?php echo $error; ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
     <?php endif; ?>
@@ -99,9 +115,13 @@ $subscribers = $pdo->query("SELECT * FROM subscribers ORDER BY created_at DESC")
                                 <?php echo date('Y/m/d H:i', strtotime($sub['created_at'])); ?>
                             </td>
                             <td class="py-3 text-center">
-                                <a href="javascript:void(0)" onclick="confirmDelete(<?php echo $sub['id']; ?>)" class="btn btn-outline-danger btn-sm rounded-pill px-3" title="حذف">
-                                    <i class="fas fa-trash-alt me-1"></i> حذف
-                                </a>
+                                <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا المشترك من القائمة البريدية؟')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="delete_subscriber" value="<?php echo $sub['id']; ?>">
+                                    <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-3" title="حذف">
+                                        <i class="fas fa-trash-alt me-1"></i> حذف
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -117,6 +137,7 @@ $subscribers = $pdo->query("SELECT * FROM subscribers ORDER BY created_at DESC")
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-light border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-paper-plane me-2 text-primary"></i> إرسال حملة بريدية</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -142,14 +163,6 @@ $subscribers = $pdo->query("SELECT * FROM subscribers ORDER BY created_at DESC")
         </div>
     </div>
 </div>
-
-<script>
-function confirmDelete(id) {
-    if(confirm('هل أنت متأكد من حذف هذا المشترك من القائمة البريدية؟')) {
-        window.location.href = 'subscribers.php?delete=' + id;
-    }
-}
-</script>
 
 <style>
     .table-hover tbody tr:hover { background-color: rgba(0,0,0,0.01) !important; }

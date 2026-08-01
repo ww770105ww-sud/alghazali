@@ -29,34 +29,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_currency'])) {
     $opening_balance = floatval($_POST['opening_balance']);
 
     try {
-        $stmt_curr = $pdo->prepare("SELECT id FROM currencies WHERE currency_code = ?");
+        $stmt_curr = $pdo->prepare("SELECT id, exchange_rate FROM currencies WHERE currency_code = ?");
         $stmt_curr->execute([$currency_code]);
-        $currency_id = $stmt_curr->fetchColumn();
+        $currency_data = $stmt_curr->fetch(PDO::FETCH_ASSOC);
+        $currency_id = $currency_data['id'];
+        $exchange_rate = $currency_data['exchange_rate'] ?? 1;
 
         if (!$currency_id) {
             throw new Exception("العملة غير موجودة");
         }
 
-        // تحقق إذا كان الرصيد موجودًا بالفعل
-        $stmt_check = $pdo->prepare("SELECT id FROM account_balances_unified WHERE account_id = ? AND currency_id = ?");
+        // هذه الشاشة تعمل على مستوى الحساب + العملة، وليس مستوى الفروع.
+        $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM account_balances_unified WHERE account_id = ? AND currency_id = ?");
         $stmt_check->execute([$account_id, $currency_id]);
-        $existing = $stmt_check->fetch();
+        $existing_count = (int)$stmt_check->fetchColumn();
 
-        if ($existing) {
-            // تحديث الرصيد الموجود
-            $stmt_update = $pdo->prepare("UPDATE account_balances_unified 
-                SET opening_balance = ?, current_balance = ? 
-                WHERE id = ?");
-            $stmt_update->execute([$opening_balance, $opening_balance, $existing['id']]);
+        $opening_balance_base = $opening_balance * $exchange_rate;
+        $current_balance_base = $opening_balance_base;
+
+        if ($existing_count > 0) {
+            throw new Exception("العملة مفعلة بالفعل لهذا الحساب.");
         } else {
             // إضافة رصيد جديد
             $stmt_insert = $pdo->prepare("INSERT INTO account_balances_unified 
-                (account_id, currency_id, currency_code, opening_balance, current_balance) 
-                VALUES (?, ?, ?, ?, ?)");
-            $stmt_insert->execute([$account_id, $currency_id, $currency_code, $opening_balance, $opening_balance]);
+                (account_id, branch_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt_insert->execute([$account_id, null, $currency_id, $currency_code, $opening_balance, $opening_balance, $opening_balance_base, $current_balance_base]);
         }
 
         $message = "تم تفعيل العملة بنجاح.";
+        $status = "success";
+    } catch (Exception $e) {
+        $message = "خطأ: " . $e->getMessage();
+        $status = "danger";
+    }
+}
+
+// معالجة حذف العملة من الحساب
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_currency'])) {
+    $account_id = $_POST['account_id'];
+    $currency_id = $_POST['currency_id'] ?? null;
+
+    try {
+        if (!$currency_id) {
+            throw new Exception("العملة المطلوب حذفها غير محددة.");
+        }
+
+        // التحقق أن جميع صفوف هذه العملة للحساب رصيدها صفر قبل الحذف
+        $stmt_check_balance = $pdo->prepare("
+            SELECT 
+                COUNT(*) AS row_count,
+                COALESCE(SUM(ABS(current_balance)), 0) AS total_abs_balance
+            FROM account_balances_unified
+            WHERE account_id = ? AND currency_id = ?
+        ");
+        $stmt_check_balance->execute([$account_id, $currency_id]);
+        $balance = $stmt_check_balance->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$balance || (int)($balance['row_count'] ?? 0) === 0) {
+            throw new Exception("العملة المطلوب حذفها غير موجودة");
+        }
+        
+        if (floatval($balance['total_abs_balance']) > 0.00001) {
+            throw new Exception("لا يمكن حذف العملة لأن الرصيد الحالي ليس صفرًا. يرجى تصفية الرصيد أولاً.");
+        }
+
+        // حذف جميع صفوف هذه العملة لهذا الحساب
+        $stmt_delete = $pdo->prepare("DELETE FROM account_balances_unified WHERE account_id = ? AND currency_id = ?");
+        $stmt_delete->execute([$account_id, $currency_id]);
+
+        $message = "تم حذف العملة بنجاح.";
         $status = "success";
     } catch (Exception $e) {
         $message = "خطأ: " . $e->getMessage();
@@ -78,19 +120,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_limits'])) {
         }
 
         // Fetch current balance for validation using currency_id
-        $stmt_current_balance = $pdo->prepare("SELECT current_balance, is_frozen FROM account_balances_unified WHERE account_id = ? AND currency_id = ?");
+        $stmt_current_balance = $pdo->prepare("
+            SELECT 
+                COALESCE(SUM(ABS(current_balance)), 0) AS total_abs_balance,
+                MAX(is_frozen) AS is_frozen
+            FROM account_balances_unified
+            WHERE account_id = ? AND currency_id = ?
+        ");
         $stmt_current_balance->execute([$account_id, $currency_id]);
         $current_balance_row = $stmt_current_balance->fetch(PDO::FETCH_ASSOC);
 
-        if (!$current_balance_row) {
+        if (!$current_balance_row || ($current_balance_row['total_abs_balance'] === null && $current_balance_row['is_frozen'] === null)) {
             throw new Exception("العملة غير مفعلة لهذا الحساب.");
         }
 
-        $current_balance = floatval($current_balance_row['current_balance']);
+        $current_balance = floatval($current_balance_row['total_abs_balance']);
         $old_is_frozen = (int)$current_balance_row['is_frozen'];
 
         // إذا كان يحاول التجميد (is_frozen=1) وكان الرصيد ليس صفراً، نمنعه
-        if ($is_frozen === 1 && $old_is_frozen === 0 && $current_balance !== 0.00) {
+        if ($is_frozen === 1 && $old_is_frozen === 0 && $current_balance > 0.00001) {
             throw new Exception("لا يمكن تجميد العملة لأن الرصيد الحالي ليس صفراً (" . number_format($current_balance, 2) . "). يرجى تصفية الرصيد أولاً.");
         }
 
@@ -447,13 +495,14 @@ foreach ($accounts as $acc) {
                                 <table class="table table-hover align-middle mb-0">
                                     <thead class="bg-light sticky-top">
                                         <tr>
-                                            <th class="px-4 py-3">العملة</th>
-                                            <th>الرصيد الافتتاحي</th>
-                                            <th>الرصيد الحالي</th>
-                                            <th>الرصيد بالعملة الأساسية</th>
-                                            <th>الحدود المالية</th>
-                                            <th class="text-center">الحالة</th>
-                                        </tr>
+                                    <th class="px-4 py-3">العملة</th>
+                                    <th>الرصيد الافتتاحي</th>
+                                    <th>الرصيد الحالي</th>
+                                    <th>الرصيد بالعملة الأساسية</th>
+                                    <th>الحدود المالية</th>
+                                    <th class="text-center">الحالة</th>
+                                    <th class="text-center">إجراءات</th>
+                                </tr>
                                     </thead>
                                     <tbody id="filtered_balance_body">
                                         <!-- سيتم تعبئته بواسطة JavaScript -->
@@ -779,6 +828,7 @@ foreach ($accounts as $acc) {
                                             <span class="extra-small fw-bold ${currentBal >= 0 ? 'text-success' : 'text-danger'}">(${debitCreditText})</span>
                                         </div>
                                         <div class="extra-small text-muted mt-1">${bal.currency_name}</div>
+                                        ${parseInt(bal.branch_count || 0, 10) > 1 ? `<div class="extra-small text-info mt-1">مجمعة من ${bal.branch_count} فروع</div>` : ''}
                                     </div>
                                 </div>
                             </div>
@@ -871,6 +921,7 @@ foreach ($accounts as $acc) {
                                 <td class="px-4">
                                     <div class="fw-bold">${bal.currency_name || ''}</div>
                                     <div class="extra-small text-muted">${bal.currency_code || ''}</div>
+                                    ${parseInt(bal.branch_count || 0, 10) > 1 ? `<div class="extra-small text-info">مجمعة من ${bal.branch_count} فروع</div>` : ''}
                                 </td>
                                 <td>
                                     <span class="fw-bold">${openingBal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
@@ -907,6 +958,18 @@ foreach ($accounts as $acc) {
                                 </td>
                                 <td class="text-center">
                                     <span class="badge ${balanceStatusClass} rounded-pill">${balanceStatusText}</span>
+                                </td>
+                                <td class="text-center">
+                                    ${bal.id ? `
+                                    <form method="POST" style="display:inline;">
+                                        <input type="hidden" name="account_id" value="${accountId}">
+                                        <input type="hidden" name="currency_id" value="${bal.currency_id}">
+                                        <button type="submit" name="delete_currency" class="btn btn-sm btn-danger rounded-pill" 
+                                            onclick="return confirm('هل أنت متأكد من حذف هذه العملة من الحساب؟ سيتم حذف جميع صفوفها المرتبطة بهذا الحساب بعد التأكد أن الرصيد صفر.')">
+                                            <i class="fas fa-trash-alt"></i>
+                                        </button>
+                                    </form>
+                                    ` : ''}
                                 </td>
                             </tr>
                         `);

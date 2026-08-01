@@ -40,6 +40,190 @@ function emptyToNull($value)
     return (empty($value) || $value == '') ? null : $value;
 }
 
+function isWorkVisaTransaction($transactionType): bool
+{
+    return in_array((string)$transactionType, ['work_visa', '6'], true);
+}
+
+function syncWorkVisaProfile(PDO $pdo, int $passportId, array $data, ?int $userId = null): void
+{
+    $stmt = $pdo->prepare("
+        INSERT INTO work_visa_profiles (
+            passport_id, full_name, full_name_en, passport_number, nationality, gender,
+            date_of_birth, passport_issue_date, passport_expiry_date, profession_id,
+            phone_number, personal_photo, passport_image, passport_country_code,
+            mrz_line_1, mrz_line_2, ocr_raw_text, created_by, updated_by
+        ) VALUES (
+            :passport_id, :full_name, :full_name_en, :passport_number, :nationality, :gender,
+            :date_of_birth, :passport_issue_date, :passport_expiry_date, :profession_id,
+            :phone_number, :personal_photo, :passport_image, :passport_country_code,
+            :mrz_line_1, :mrz_line_2, :ocr_raw_text, :created_by, :updated_by
+        )
+        ON DUPLICATE KEY UPDATE
+            full_name = VALUES(full_name),
+            full_name_en = VALUES(full_name_en),
+            passport_number = VALUES(passport_number),
+            nationality = VALUES(nationality),
+            gender = VALUES(gender),
+            date_of_birth = VALUES(date_of_birth),
+            passport_issue_date = VALUES(passport_issue_date),
+            passport_expiry_date = VALUES(passport_expiry_date),
+            profession_id = VALUES(profession_id),
+            phone_number = VALUES(phone_number),
+            personal_photo = COALESCE(VALUES(personal_photo), personal_photo),
+            passport_image = COALESCE(VALUES(passport_image), passport_image),
+            passport_country_code = VALUES(passport_country_code),
+            mrz_line_1 = VALUES(mrz_line_1),
+            mrz_line_2 = VALUES(mrz_line_2),
+            ocr_raw_text = VALUES(ocr_raw_text),
+            updated_by = VALUES(updated_by),
+            updated_at = CURRENT_TIMESTAMP
+    ");
+
+    $stmt->execute([
+        ':passport_id' => $passportId,
+        ':full_name' => $data['full_name'] ?? null,
+        ':full_name_en' => emptyToNull($data['full_name_en'] ?? null),
+        ':passport_number' => $data['passport_number'] ?? null,
+        ':nationality' => emptyToNull($data['nationality'] ?? null),
+        ':gender' => emptyToNull($data['gender'] ?? null),
+        ':date_of_birth' => emptyToNull($data['date_of_birth'] ?? null),
+        ':passport_issue_date' => emptyToNull($data['passport_issue_date'] ?? null),
+        ':passport_expiry_date' => emptyToNull($data['passport_expiry_date'] ?? null),
+        ':profession_id' => emptyToNull($data['profession_id'] ?? null),
+        ':phone_number' => emptyToNull($data['phone_number'] ?? null),
+        ':personal_photo' => emptyToNull($data['personal_photo'] ?? null),
+        ':passport_image' => emptyToNull($data['passport_image'] ?? null),
+        ':passport_country_code' => emptyToNull($data['passport_country_code'] ?? null),
+        ':mrz_line_1' => emptyToNull($data['mrz_line_1'] ?? null),
+        ':mrz_line_2' => emptyToNull($data['mrz_line_2'] ?? null),
+        ':ocr_raw_text' => emptyToNull($data['ocr_raw_text'] ?? null),
+        ':created_by' => $userId,
+        ':updated_by' => $userId,
+    ]);
+}
+
+function computeInvoicePaymentStatus(float $totalAmount, float $discountAmount, float $receivedAmount): string
+{
+    $netAmount = max(0, $totalAmount - $discountAmount);
+    if ($receivedAmount <= 0.000001) {
+        return 'unpaid';
+    }
+    if ($receivedAmount + 0.000001 >= $netAmount) {
+        return 'fully_paid';
+    }
+    return 'partial';
+}
+
+function resolveSupplierAccountId(PDO $pdo, ?int $supplierId): ?int
+{
+    if (!$supplierId) {
+        return null;
+    }
+    $stmt = $pdo->prepare("SELECT account_id FROM suppliers WHERE id = ?");
+    $stmt->execute([$supplierId]);
+    $accountId = $stmt->fetchColumn();
+    return $accountId ? (int)$accountId : null;
+}
+
+function upsertPassportInvoiceDraft(PDO $pdo, ?int $invoiceId, string $category, array $payload, int $userId): ?int
+{
+    if ($invoiceId) {
+        $stmtExisting = $pdo->prepare("SELECT id, invoice_status FROM invoices WHERE id = ? LIMIT 1");
+        $stmtExisting->execute([$invoiceId]);
+        $existing = $stmtExisting->fetch(PDO::FETCH_ASSOC);
+        if ($existing) {
+            if (($existing['invoice_status'] ?? 'draft') !== 'draft') {
+                return (int)$invoiceId;
+            }
+
+            $currencyId = $category === 'sales' ? ($payload['sale_currency_id'] ?? null) : ($payload['purchase_currency_id'] ?? null);
+            $totalAmount = $category === 'sales' ? ($payload['sale_total_amount'] ?? 0) : ($payload['purchase_total_amount'] ?? 0);
+            $discountAmount = $category === 'sales' ? ($payload['discount_amount'] ?? 0) : 0;
+            $receivedAmount = $category === 'sales' ? ($payload['received_amount'] ?? 0) : 0;
+            $paymentStatus = $category === 'sales'
+                ? computeInvoicePaymentStatus((float)$totalAmount, (float)$discountAmount, (float)$receivedAmount)
+                : 'unpaid';
+            $netAmount = max(0, (float)$totalAmount - (float)$discountAmount);
+            $accountId = $category === 'purchase'
+                ? resolveSupplierAccountId($pdo, $payload['supplier_id'] ?? null)
+                : ($payload['account_id'] ?? null);
+
+            $stmtUpdate = $pdo->prepare("
+                UPDATE invoices
+                SET invoice_date = ?,
+                    branch_id = ?,
+                    source_type = ?,
+                    source_id = ?,
+                    customer_id = ?,
+                    supplier_id = ?,
+                    agent_id = ?,
+                    account_id = ?,
+                    currency_id = ?,
+                    total_amount = ?,
+                    discount = ?,
+                    cost_amount = ?,
+                    net_amount = ?,
+                    amount_received = ?,
+                    delivery_type = ?,
+                    payment_status = ?,
+                    description = ?
+                WHERE id = ? AND invoice_status = 'draft'
+            ");
+            $stmtUpdate->execute([
+                $payload['invoice_date'],
+                $payload['branch_id'],
+                $payload['source_type'],
+                $payload['source_id'],
+                $category === 'sales' ? ($payload['customer_id'] ?? null) : null,
+                $category === 'purchase' ? ($payload['supplier_id'] ?? null) : null,
+                $category === 'sales' ? ($payload['agent_id'] ?? null) : null,
+                $accountId,
+                $currencyId,
+                $totalAmount,
+                $discountAmount,
+                $category === 'sales' ? ($payload['purchase_total_amount'] ?? 0) : $totalAmount,
+                $netAmount,
+                $receivedAmount,
+                $payload['delivery_type'] ?? 'draft',
+                $paymentStatus,
+                $payload['description'] ?? null,
+                $invoiceId,
+            ]);
+            return (int)$invoiceId;
+        }
+    }
+
+    require_once '../core/FinanceService.php';
+    $financeService = new FinanceService($pdo, $userId);
+    return $financeService->createInvoiceDraft([
+        'branch_id' => $payload['branch_id'],
+        'source_type' => $payload['source_type'],
+        'source_id' => $payload['source_id'],
+        'source_number' => $payload['source_number'] ?? null,
+        'customer_id' => $payload['customer_id'] ?? null,
+        'supplier_id' => $payload['supplier_id'] ?? null,
+        'agent_id' => $payload['agent_id'] ?? null,
+        'account_id' => $category === 'purchase'
+            ? resolveSupplierAccountId($pdo, $payload['supplier_id'] ?? null)
+            : ($payload['account_id'] ?? null),
+        'sale_currency_id' => $payload['sale_currency_id'] ?? null,
+        'currency_id' => $payload['purchase_currency_id'] ?? null,
+        'purchase_currency_id' => $payload['purchase_currency_id'] ?? null,
+        'exchange_rate' => $payload['exchange_rate'] ?? 1,
+        'discount_amount' => $payload['discount_amount'] ?? 0,
+        'sale_total_amount' => $payload['sale_total_amount'] ?? 0,
+        'purchase_total_amount' => $payload['purchase_total_amount'] ?? 0,
+        'total_amount' => $payload['sale_total_amount'] ?? 0,
+        'purchase_price' => $payload['purchase_total_amount'] ?? 0,
+        'delivery_type' => $payload['delivery_type'] ?? 'draft',
+        'description' => $payload['description'] ?? '',
+        'operation_date' => $payload['invoice_date'] ?? null,
+        'invoice_date' => $payload['invoice_date'] ?? null,
+        'received_amount' => $payload['received_amount'] ?? 0,
+    ], $category);
+}
+
 // معالجة طلب AJAX لجلب أسعار الخدمات
 if (isset($_GET['get_service_price'])) {
     $service_id = $_GET['service_id'];
@@ -233,11 +417,19 @@ if (isset($_POST['add_passport'])) {
     $passport_number = $_POST['passport_number'];
     $full_name = $_POST['full_name'];
     $customer_id = null;
+    $confirm_duplicate = isset($_POST['confirm_duplicate']) && (string)$_POST['confirm_duplicate'] === '1';
+    $default_description = isWorkVisaTransaction($transaction_type)
+        ? "معاملة تأشيرة عمل للأخ {$full_name}" . (!empty($passport_number) ? " - رقم الجواز {$passport_number}" : '')
+        : "معاملة {$transaction_type} للمسافر: {$full_name}";
+    $posted_description = trim((string)($_POST['description'] ?? ''));
+    if ($posted_description === '') {
+        $posted_description = $default_description;
+    }
 
     // التحقق من تكرار البيانات بناءً على الإعدادات
     $allow_duplicate = $settings_data['allow_duplicate_work_visa'] ?? 0;
 
-    if (!$allow_duplicate) {
+    if (!$allow_duplicate && !$confirm_duplicate) {
         // التحقق من تكرار رقم الجواز والاسم لنفس نوع المعاملة
         $stmt_check = $pdo->prepare("SELECT id, agent_id, branch_id FROM passports WHERE (passport_number = ? OR full_name = ?) AND transaction_type = ?");
         $stmt_check->execute([$passport_number, $full_name, $transaction_type]);
@@ -251,7 +443,7 @@ if (isset($_POST['add_passport'])) {
             header("Location: " . ($_POST['redirect'] ?? 'passports.php') . "?error=" . $error_msg . "&number=" . $passport_number . "&name=" . urlencode($full_name));
             exit();
         }
-    } else {
+    } elseif (!$confirm_duplicate) {
         // إذا كان التكرار مسموحاً، نكتفي بالتحقق من رقم الجواز فقط إذا كان لنفس الوكيل ونفس النوع (لمنع الأخطاء التقنية البسيطة)
         $stmt_check = $pdo->prepare("SELECT id FROM passports WHERE passport_number = ? AND transaction_type = ? AND agent_id = ? AND status_id NOT IN (5, 14, 19)");
         $stmt_check->execute([$passport_number, $transaction_type, $agent_id]);
@@ -330,7 +522,7 @@ if (isset($_POST['add_passport'])) {
             $deportation_image,
             $letter_image,
             $print_image,
-            $_POST['description'] ?? null,
+            $posted_description,
             $_POST['notes'] ?? null
         ]);
     } catch (PDOException $e) {
@@ -341,34 +533,76 @@ if (isset($_POST['add_passport'])) {
 
     $passport_id = $pdo->lastInsertId();
 
+    if (isWorkVisaTransaction($transaction_type)) {
+        try {
+            syncWorkVisaProfile($pdo, (int)$passport_id, [
+                'full_name' => $_POST['full_name'] ?? null,
+                'full_name_en' => $_POST['full_name_en'] ?? null,
+                'passport_number' => $passport_number,
+                'nationality' => $_POST['nationality'] ?? null,
+                'gender' => $_POST['gender'] ?? null,
+                'date_of_birth' => $_POST['date_of_birth'] ?? null,
+                'passport_issue_date' => $_POST['passport_issue_date'] ?? null,
+                'passport_expiry_date' => $_POST['passport_expiry_date'] ?? null,
+                'profession_id' => $_POST['profession_id'] ?? null,
+                'phone_number' => $_POST['phone_number'] ?? null,
+                'personal_photo' => $personal_photo,
+                'passport_image' => $passport_image,
+                'passport_country_code' => $_POST['passport_country_code'] ?? null,
+                'mrz_line_1' => $_POST['mrz_line_1'] ?? null,
+                'mrz_line_2' => $_POST['mrz_line_2'] ?? null,
+                'ocr_raw_text' => $_POST['ocr_raw_text'] ?? null,
+            ], $user_id);
+        } catch (Exception $e) {
+            error_log("Work visa profile sync error (insert): " . $e->getMessage());
+        }
+    }
+
     // دمج المحرك المالي الموحد لجميع المعاملات التي تستخدم جدول passports
     try {
         require_once '../includes/ServiceFinancialEngine.php';
         $financialEngine = new ServiceFinancialEngine($pdo, $user_id);
         
-        // جلب العملة وأسعار الصرف إذا وجدت
-        $sale_currency_id = $_POST['currency_id'] ?? 1;
+        $sale_currency_id = $_POST['sale_currency_id'] ?? ($_POST['currency_id'] ?? 1);
+        $purchase_currency_id = $_POST['currency_id'] ?? ($_POST['purchase_currency_id'] ?? $sale_currency_id);
         $exchange_rate = $_POST['exchange_rate'] ?? 1;
+        $invoice_date = normalize_datetime_db($_POST['invoice_date'] ?? ($_POST['operation_date'] ?? null));
+        $delivery_type = $_POST['delivery_type'] ?? ($_POST['payment_type'] ?? ($settings_data['default_delivery_type'] ?? 'draft'));
+        $record_purchase = isset($_POST['record_purchase']) ? (string)$_POST['record_purchase'] : '1';
+        $sale_total_amount = $_POST['total_amount'] ?? ($_POST['sale_price'] ?? 0);
+        $purchase_total_amount = $_POST['cost_amount'] ?? ($_POST['purchase_price'] ?? 0);
+        $received_amount = $_POST['received_amount'] ?? ($_POST['amount_received'] ?? 0);
+        $description = $posted_description;
+        if ($description === '') {
+            $description = $default_description;
+        }
         
         $financeResults = $financialEngine->processServiceFinance([
             'service_type'    => $transaction_type,
+            'source_type'     => isWorkVisaTransaction($transaction_type) ? 'فيز العمل' : $transaction_type,
             'source_id'       => $passport_id,
             'source_number'   => $passport_number,
             'branch_id'       => $branch_id,
             'customer_id'     => $_POST['customer_id'] ?? null,
             'agent_id'        => $agent_id,
             'supplier_id'     => $_POST['supplier_id'] ?? null,
-            'sale_price'      => $_POST['sale_price'] ?? 0,
+            'sale_price'      => $sale_total_amount,
+            'total_amount'    => $sale_total_amount,
             'discount'        => $_POST['discount'] ?? 0,
-            'purchase_price'  => $_POST['purchase_price'] ?? 0,
+            'purchase_price'  => $purchase_total_amount,
+            'cost_amount'     => $purchase_total_amount,
             'sale_currency_id'=> $sale_currency_id,
-            'pur_currency_id' => $_POST['purchase_currency_id'] ?? $sale_currency_id,
+            'currency_id'     => $purchase_currency_id,
+            'pur_currency_id' => $purchase_currency_id,
             'exchange_rate'   => $exchange_rate,
-            'amount_received' => $_POST['amount_received'] ?? 0,
+            'received_amount' => $received_amount,
+            'amount_received' => $received_amount,
             'payment_account_id' => $_POST['account_id'] ?? null,
-            'delivery_type'   => $_POST['payment_type'] ?? 'credit',
-            'description'     => ($_POST['description'] ?? "معاملة " . $transaction_type) . " للمسافر: " . $full_name,
-            'operation_date'  => $_POST['operation_date'] ?? date('Y-m-d')
+            'delivery_type'   => $delivery_type,
+            'description'     => $description,
+            'record_purchase' => $record_purchase,
+            'invoice_date'    => $invoice_date,
+            'operation_date'  => $invoice_date
         ]);
         
         // ربط المعاملة بفواتير البيع والشراء
@@ -500,6 +734,106 @@ if (isset($_POST['update_passport'])) {
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
+
+    if (isWorkVisaTransaction($_POST['transaction_type'] ?? $existing_passport['transaction_type'] ?? null)) {
+        try {
+            syncWorkVisaProfile($pdo, (int)$passport_id, [
+                'full_name' => $_POST['full_name'] ?? null,
+                'full_name_en' => $_POST['full_name_en'] ?? null,
+                'passport_number' => $passport_number,
+                'nationality' => $_POST['nationality'] ?? null,
+                'gender' => $_POST['gender'] ?? null,
+                'date_of_birth' => $_POST['date_of_birth'] ?? null,
+                'passport_issue_date' => $_POST['passport_issue_date'] ?? null,
+                'passport_expiry_date' => $_POST['passport_expiry_date'] ?? null,
+                'profession_id' => $_POST['profession_id'] ?? null,
+                'phone_number' => $_POST['phone_number'] ?? null,
+                'passport_country_code' => $_POST['passport_country_code'] ?? null,
+                'mrz_line_1' => $_POST['mrz_line_1'] ?? null,
+                'mrz_line_2' => $_POST['mrz_line_2'] ?? null,
+                'ocr_raw_text' => $_POST['ocr_raw_text'] ?? null,
+            ], $user_id);
+        } catch (Exception $e) {
+            error_log("Work visa profile sync error (update): " . $e->getMessage());
+        }
+
+        try {
+            $stmtFinancialLinks = $pdo->prepare("SELECT sales_invoice_id, purchase_invoice_id FROM passports WHERE id = ?");
+            $stmtFinancialLinks->execute([$passport_id]);
+            $financialLinks = $stmtFinancialLinks->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            $invoiceDate = normalize_datetime_db($_POST['invoice_date'] ?? null);
+            $saleCurrencyId = (int)($_POST['sale_currency_id'] ?? ($_POST['currency_id'] ?? 1));
+            $purchaseCurrencyId = (int)($_POST['currency_id'] ?? ($_POST['purchase_currency_id'] ?? $saleCurrencyId));
+            $discountAmount = (float)($_POST['discount'] ?? 0);
+            $saleTotalAmount = (float)($_POST['total_amount'] ?? ($_POST['sale_price'] ?? 0));
+            $purchaseTotalAmount = (float)($_POST['cost_amount'] ?? ($_POST['purchase_price'] ?? 0));
+            $receivedAmount = (float)($_POST['received_amount'] ?? ($_POST['amount_received'] ?? 0));
+            $customerId = emptyToNull($_POST['customer_id'] ?? null);
+            $agentId = emptyToNull($_POST['agent_id_hidden'] ?? ($_POST['agent_id'] ?? null));
+            $accountId = emptyToNull($_POST['account_id'] ?? null);
+            $supplierId = emptyToNull($_POST['supplier_id'] ?? null);
+            $recordPurchase = isset($_POST['record_purchase']) ? (string)$_POST['record_purchase'] : '1';
+            $financialDescription = trim((string)($_POST['description'] ?? ''));
+            if ($financialDescription === '') {
+                $financialDescription = "معاملة تأشيرة عمل للأخ {$full_name}" . (!empty($passport_number) ? " - رقم الجواز {$passport_number}" : '');
+            }
+
+            $financialPayload = [
+                'branch_id' => emptyToNull($_POST['branch_id'] ?? null),
+                'source_type' => 'فيز العمل',
+                'source_id' => (int)$passport_id,
+                'source_number' => $passport_number,
+                'customer_id' => $customerId,
+                'agent_id' => $agentId,
+                'supplier_id' => $supplierId,
+                'account_id' => $accountId,
+                'sale_currency_id' => $saleCurrencyId,
+                'purchase_currency_id' => $purchaseCurrencyId,
+                'exchange_rate' => (float)($_POST['exchange_rate'] ?? 1),
+                'discount_amount' => $discountAmount,
+                'sale_total_amount' => $saleTotalAmount,
+                'purchase_total_amount' => $purchaseTotalAmount,
+                'received_amount' => $receivedAmount,
+                'delivery_type' => $_POST['delivery_type'] ?? ($_POST['payment_type'] ?? ($settings_data['default_delivery_type'] ?? 'draft')),
+                'invoice_date' => $invoiceDate,
+                'description' => $financialDescription,
+            ];
+
+            $salesInvoiceId = upsertPassportInvoiceDraft(
+                $pdo,
+                !empty($financialLinks['sales_invoice_id']) ? (int)$financialLinks['sales_invoice_id'] : null,
+                'sales',
+                $financialPayload,
+                $user_id
+            );
+
+            $purchaseInvoiceId = !empty($financialLinks['purchase_invoice_id']) ? (int)$financialLinks['purchase_invoice_id'] : null;
+            if ($recordPurchase === '1' && !empty($supplierId) && $purchaseTotalAmount > 0) {
+                $purchaseInvoiceId = upsertPassportInvoiceDraft(
+                    $pdo,
+                    $purchaseInvoiceId,
+                    'purchase',
+                    $financialPayload,
+                    $user_id
+                );
+            }
+
+            $stmtUpdateLinks = $pdo->prepare("
+                UPDATE passports
+                SET sales_invoice_id = COALESCE(?, sales_invoice_id),
+                    purchase_invoice_id = COALESCE(?, purchase_invoice_id)
+                WHERE id = ?
+            ");
+            $stmtUpdateLinks->execute([
+                $salesInvoiceId,
+                $purchaseInvoiceId,
+                $passport_id
+            ]);
+        } catch (Exception $e) {
+            error_log("Work visa finance sync error (update): " . $e->getMessage());
+        }
+    }
 
     // تسجيل الحركة في سجل التتبع (حتى لو لم تتغير الحالة)
     $stmt_log_edit = $pdo->prepare("INSERT INTO transaction_status_logs (transaction_id, new_status_id, changed_by, notes) VALUES (?, ?, ?, ?)");

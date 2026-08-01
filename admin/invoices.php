@@ -17,6 +17,49 @@ if (!isset($_SESSION['admin_id'])) {
 $admin_id = $_SESSION['admin_id'];
 $success_msg = "";
 $error_msg = "";
+$umrah_source_aliases = get_umrah_service_aliases();
+$umrah_source_placeholders = implode(', ', array_fill(0, count($umrah_source_aliases), '?'));
+$hajj_source_aliases = get_hajj_service_aliases();
+$hajj_source_placeholders = implode(', ', array_fill(0, count($hajj_source_aliases), '?'));
+$postal_source_aliases = get_postal_service_aliases();
+$postal_source_placeholders = implode(', ', array_fill(0, count($postal_source_aliases), '?'));
+$booking_service_source_aliases = ['حجوزات الباصات والطيران', 'تذاكر طيران وبصات', 'حجوزات الباصات', 'حجوزات الطيران', 'bus', 'flight', 'الطيران'];
+$booking_service_source_placeholders = implode(', ', array_fill(0, count($booking_service_source_aliases), '?'));
+$passport_service_source_aliases = array_values(array_unique(array_merge($umrah_source_aliases, $hajj_source_aliases)));
+$passport_service_source_placeholders = implode(', ', array_fill(0, count($passport_service_source_aliases), '?'));
+$family_visit_source_aliases = ['زيارة عائلية'];
+$family_visit_source_placeholders = implode(', ', array_fill(0, count($family_visit_source_aliases), '?'));
+$passport_transaction_source_aliases = ['معاملات جواز', 'معاملات جوازات'];
+$passport_transaction_source_placeholders = implode(', ', array_fill(0, count($passport_transaction_source_aliases), '?'));
+
+function invoice_safe_return_to($value, $default = 'invoices.php')
+{
+    if (!is_string($value) || trim($value) === '') {
+        return $default;
+    }
+
+    $parts = parse_url($value);
+    if ($parts === false || !empty($parts['scheme']) || !empty($parts['host'])) {
+        return $default;
+    }
+
+    $path = ltrim((string)($parts['path'] ?? ''), "/\\");
+    if ($path === '') {
+        $path = $default;
+    }
+
+    $result = $path;
+    if (!empty($parts['query'])) {
+        $result .= '?' . $parts['query'];
+    }
+
+    return $result;
+}
+
+$legacyInvoiceActionRequested = isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice']) || isset($_GET['post_invoice']) || isset($_GET['post_all']) || isset($_GET['delete_invoice']) || isset($_GET['reset_purchase']) || isset($_GET['post_purchase']) || isset($_GET['confirm_linked']) || isset($_GET['delete_both']) || isset($_GET['delete_linked_only']);
+if ($legacyInvoiceActionRequested) {
+    $error_msg = "تم تعطيل تنفيذ أوامر الفواتير الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
 
 // API endpoint to get active currencies for an account
 if (isset($_GET['action']) && $_GET['action'] === 'get_active_currencies' && isset($_GET['account_id'])) {
@@ -28,7 +71,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_active_currencies' && iss
     } else {
         $account_id = (int)$account_id_param;
         $stmt = $pdo->prepare("
-            SELECT c.id, c.currency_name, c.currency_symbol, c.exchange_rate, c.exchange_rate_buy, c.exchange_rate_sell, c.is_default
+            SELECT DISTINCT c.id, c.currency_name, c.currency_symbol, c.exchange_rate, c.exchange_rate_buy, c.exchange_rate_sell, c.is_default
             FROM account_balances_unified abu
             JOIN currencies c ON abu.currency_id = c.id
             WHERE abu.account_id = ? AND abu.is_frozen = 0
@@ -72,11 +115,11 @@ $params = [];
 
 if (!empty($_GET['from_date'])) {
     $where .= " AND invoice_date >= ?";
-    $params[] = $_GET['from_date'];
+    $params[] = normalize_date_filter_start($_GET['from_date']);
 }
 if (!empty($_GET['to_date'])) {
     $where .= " AND invoice_date <= ?";
-    $params[] = $_GET['to_date'];
+    $params[] = normalize_date_filter_end($_GET['to_date']);
 }
 if (!empty($_GET['invoice_category'])) {
     $where .= " AND invoice_category = ?";
@@ -329,7 +372,13 @@ function get_accounts_under_parent($pdo, $parent_account_code, $entity_type = nu
     $stmt->execute([$parent_id]);
     $accounts = [];
     while ($row = $stmt->fetch()) {
-        $row['display_name'] = $row['account_code'] . ' - ' . $row['account_name_ar'];
+        $display_name = $row['account_code'] . ' - ' . $row['account_name_ar'];
+        if ($entity_type === 'customer' && empty($row['customer_id'])) {
+            $display_name .= ' (legacy غير مربوط)';
+        } elseif ($entity_type === 'agent' && empty($row['agent_id'])) {
+            $display_name .= ' (legacy غير مربوط)';
+        }
+        $row['display_name'] = $display_name;
         $row['name'] = $row['account_name_ar'];
         $accounts[] = $row;
     }
@@ -338,8 +387,8 @@ function get_accounts_under_parent($pdo, $parent_account_code, $entity_type = nu
 
 $cashboxes_entities = get_accounts_under_parent($pdo, '11101');
 $banks_entities = get_accounts_under_parent($pdo, '11102');
-$customers_entities = get_accounts_under_parent($pdo, '11201');
-$agents_entities = get_accounts_under_parent($pdo, '11203');
+$customers_entities = get_accounts_under_parent($pdo, '11201', 'customer');
+$agents_entities = get_accounts_under_parent($pdo, '11203', 'agent');
 
 // Debug: Uncomment to see the data
 // echo "<pre>";
@@ -449,6 +498,44 @@ function getPartyName($pdo, $inv)
     return "فاتورة عامة";
 }
 
+function resolveInvoicePartyAccounts($pdo, $delivery_type, $account_id, $customer_id = null, $agent_id = null, $supplier_id = null)
+{
+    $resolved = [
+        'customer_account_id' => null,
+        'agent_account_id' => null,
+        'supplier_account_id' => null,
+    ];
+
+    if ($customer_id) {
+        $stmt = $pdo->prepare("SELECT account_id FROM customers WHERE id = ?");
+        $stmt->execute([$customer_id]);
+        $resolved['customer_account_id'] = $stmt->fetchColumn() ?: null;
+    }
+
+    if ($agent_id) {
+        $stmt = $pdo->prepare("SELECT account_id FROM agents WHERE id = ?");
+        $stmt->execute([$agent_id]);
+        $resolved['agent_account_id'] = $stmt->fetchColumn() ?: null;
+    }
+
+    if ($supplier_id) {
+        $stmt = $pdo->prepare("SELECT account_id FROM suppliers WHERE id = ?");
+        $stmt->execute([$supplier_id]);
+        $resolved['supplier_account_id'] = $stmt->fetchColumn() ?: null;
+    }
+
+    // Legacy fallback: عند غياب سجل customer/agent المرتبط، نستخدم الحساب المختار مباشرة.
+    if (!$resolved['customer_account_id'] && in_array($delivery_type, ['credit', 'credit_doc'], true) && $account_id) {
+        $resolved['customer_account_id'] = $account_id;
+    }
+
+    if (!$resolved['agent_account_id'] && $delivery_type === 'agent' && $account_id) {
+        $resolved['agent_account_id'] = $account_id;
+    }
+
+    return $resolved;
+}
+
 // معالجة العمليات (يجب أن تكون قبل header.php لمنع خطأ Headers already sent)
 // معالجة ترحيل الفواتير (تعديل)
 if (isset($_POST['update_invoice'])) {
@@ -496,7 +583,7 @@ if (isset($_POST['update_invoice'])) {
             }
 
             if ($current_inv['invoice_status'] == 'draft') {
-                $invoice_date = $_POST['invoice_date'];
+                $invoice_date = normalize_datetime_db($_POST['invoice_date'] ?? null);
 
                 // --- التحقق من إغلاق الفترة المالية ---
                 if (is_period_closed($pdo, $invoice_date)) {
@@ -542,30 +629,21 @@ if (isset($_POST['update_invoice'])) {
                         }
                     }
 
-                    // جلب حساب العميل
-                    $customer_account_id = null;
-                    if ($customer_id) {
-                        $stmt_cust_acc = $pdo->prepare("SELECT account_id FROM customers WHERE id = ?");
-                        $stmt_cust_acc->execute([$customer_id]);
-                        $customer_account_id = $stmt_cust_acc->fetchColumn();
-                        if ($customer_account_id) {
-                            $cust_acc_validation = validate_postable_account($pdo, $customer_account_id);
-                            if (!$cust_acc_validation['valid']) {
-                                throw new Exception($cust_acc_validation['message']);
-                            }
+                    $partyAccounts = resolveInvoicePartyAccounts($pdo, $delivery_type, $account_id, $customer_id, $agent_id, null);
+                    $customer_account_id = $partyAccounts['customer_account_id'];
+                    $agent_account_id = $partyAccounts['agent_account_id'];
+
+                    if ($customer_account_id) {
+                        $cust_acc_validation = validate_postable_account($pdo, $customer_account_id);
+                        if (!$cust_acc_validation['valid']) {
+                            throw new Exception($cust_acc_validation['message']);
                         }
                     }
 
-                    // التحقق من صحة حساب الوكيل
-                    if ($agent_id) {
-                        $stmt_agent_acc = $pdo->prepare("SELECT account_id FROM agents WHERE id = ?");
-                        $stmt_agent_acc->execute([$agent_id]);
-                        $agent_account_id = $stmt_agent_acc->fetchColumn();
-                        if ($agent_account_id) {
-                            $agent_acc_validation = validate_postable_account($pdo, $agent_account_id);
-                            if (!$agent_acc_validation['valid']) {
-                                throw new Exception($agent_acc_validation['message']);
-                            }
+                    if ($agent_account_id) {
+                        $agent_acc_validation = validate_postable_account($pdo, $agent_account_id);
+                        if (!$agent_acc_validation['valid']) {
+                            throw new Exception($agent_acc_validation['message']);
                         }
                     }
 
@@ -602,17 +680,12 @@ if (isset($_POST['update_invoice'])) {
 
                     $cost_amount = (float)$_POST['cost_amount'];
                     $supplier_id = $_POST['supplier_id'] ?: null;
-                    $supplier_account_id = null;
-                    if ($supplier_id) {
-                        $stmt_sup = $pdo->prepare("SELECT account_id FROM suppliers WHERE id = ?");
-                        $stmt_sup->execute([$supplier_id]);
-                        $supplier_account_id = $stmt_sup->fetchColumn();
-                        // التحقق من صحة حساب المورد
-                        if ($supplier_account_id) {
-                            $supplier_acc_validation = validate_postable_account($pdo, $supplier_account_id);
-                            if (!$supplier_acc_validation['valid']) {
-                                throw new Exception($supplier_acc_validation['message']);
-                            }
+                    $partyAccounts = resolveInvoicePartyAccounts($pdo, 'credit', null, null, null, $supplier_id);
+                    $supplier_account_id = $partyAccounts['supplier_account_id'];
+                    if ($supplier_account_id) {
+                        $supplier_acc_validation = validate_postable_account($pdo, $supplier_account_id);
+                        if (!$supplier_acc_validation['valid']) {
+                            throw new Exception($supplier_acc_validation['message']);
                         }
                     }
 
@@ -647,9 +720,15 @@ if (isset($_POST['update_invoice'])) {
                     $p_pref = $inv_config['purchase_prefix'];
                     $p_num = str_replace($s_pref, $p_pref, $sale_data['invoice_number']);
 
-                    $stmt_sup = $pdo->prepare("SELECT account_id FROM suppliers WHERE id = ?");
-                    $stmt_sup->execute([$supplier_id]);
-                    $supplier_account_id = $stmt_sup->fetchColumn();
+                    $partyAccounts = resolveInvoicePartyAccounts($pdo, 'credit', null, null, null, $supplier_id);
+                    $supplier_account_id = $partyAccounts['supplier_account_id'];
+
+                    if ($supplier_account_id) {
+                        $supplier_acc_validation = validate_postable_account($pdo, $supplier_account_id);
+                        if (!$supplier_acc_validation['valid']) {
+                            throw new Exception($supplier_acc_validation['message']);
+                        }
+                    }
 
                     $stmt_ins_pur = $pdo->prepare("INSERT INTO invoices (
                     invoice_number, invoice_date, branch_id, invoice_category,
@@ -686,7 +765,7 @@ if (isset($_POST['add_invoice'])) {
         try {
             $pdo->beginTransaction();
 
-            $invoice_date = $_POST['invoice_date'] ?? date('Y-m-d');
+            $invoice_date = normalize_datetime_db($_POST['invoice_date'] ?? null);
 
             // --- التحقق من إغلاق الفترة المالية ---
             if (is_period_closed($pdo, $invoice_date)) {
@@ -738,30 +817,21 @@ if (isset($_POST['add_invoice'])) {
                 }
             }
 
-            // التحقق من صحة حساب العميل إذا كان مُختارًا
-            $customer_account_id = null;
-            if ($customer_id) {
-                $stmt_cust_acc = $pdo->prepare("SELECT account_id FROM customers WHERE id = ?");
-                $stmt_cust_acc->execute([$customer_id]);
-                $customer_account_id = $stmt_cust_acc->fetchColumn();
-                if ($customer_account_id) {
-                    $cust_acc_validation = validate_postable_account($pdo, $customer_account_id);
-                    if (!$cust_acc_validation['valid']) {
-                        throw new Exception($cust_acc_validation['message']);
-                    }
+            $partyAccounts = resolveInvoicePartyAccounts($pdo, $delivery_type, $account_id, $customer_id, $agent_id, null);
+            $customer_account_id = $partyAccounts['customer_account_id'];
+            $agent_account_id = $partyAccounts['agent_account_id'];
+
+            if ($customer_account_id) {
+                $cust_acc_validation = validate_postable_account($pdo, $customer_account_id);
+                if (!$cust_acc_validation['valid']) {
+                    throw new Exception($cust_acc_validation['message']);
                 }
             }
 
-            // التحقق من صحة حساب الوكيل إذا كان مُختارًا
-            if ($agent_id) {
-                $stmt_agent_acc = $pdo->prepare("SELECT account_id FROM agents WHERE id = ?");
-                $stmt_agent_acc->execute([$agent_id]);
-                $agent_account_id = $stmt_agent_acc->fetchColumn();
-                if ($agent_account_id) {
-                    $agent_acc_validation = validate_postable_account($pdo, $agent_account_id);
-                    if (!$agent_acc_validation['valid']) {
-                        throw new Exception($agent_acc_validation['message']);
-                    }
+            if ($agent_account_id) {
+                $agent_acc_validation = validate_postable_account($pdo, $agent_account_id);
+                if (!$agent_acc_validation['valid']) {
+                    throw new Exception($agent_acc_validation['message']);
                 }
             }
 
@@ -843,10 +913,8 @@ if (isset($_POST['add_invoice'])) {
                 // exit;
 
                 if ($supplier_id && $purchase_cost > 0) {
-                    // جلب account_id المورد
-                    $stmt_sup_acc = $pdo->prepare("SELECT account_id FROM suppliers WHERE id = ?");
-                    $stmt_sup_acc->execute([$supplier_id]);
-                    $supplier_account_id = $stmt_sup_acc->fetchColumn();
+                    $partyAccounts = resolveInvoicePartyAccounts($pdo, 'credit', null, null, null, $supplier_id);
+                    $supplier_account_id = $partyAccounts['supplier_account_id'];
                     
                     // التحقق من صحة حساب المورد
                     if ($supplier_account_id) {
@@ -905,11 +973,16 @@ if (isset($_POST['add_invoice'])) {
     }
 }
 
-// إعادة تعيين الفاتورة لمسودة (للإصلاح)
-if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
+// إعادة تعيين الفاتورة لمسودة (للإصلاح) عبر POST + CSRF فقط
+if (isset($_POST['invoice_action']) && $_POST['invoice_action'] === 'reset_invoice') {
     try {
-        $id = isset($_GET['reset_invoice']) ? (int)$_GET['reset_invoice'] : (int)$_GET['unpost_invoice'];
-        $type = $_GET['reset_type'] ?? 'sales'; // sales, purchase, all
+        if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+            throw new Exception("خطأ في التحقق من الطلب (CSRF).");
+        }
+
+        $id = (int)($_POST['invoice_id'] ?? 0);
+        $type = $_POST['reset_type'] ?? 'sales'; // sales, purchase, all
+        $linked_invoice_id = (int)($_POST['linked_invoice_id'] ?? 0);
         $user_id = $_SESSION['admin_id'];
 
         $pdo->beginTransaction();
@@ -930,7 +1003,13 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
             // الطريقة 1: البحث عن الفواتير المقابلة باستخدام الأعمدة الجديدة (sales_invoice_id, purchase_invoice_id) من جدول الخدمة
             if ($row['source_id'] && $row['source_type']) {
                 $source_tables = [
+                    'خدمات العمرة' => 'passports',
                     'حج وعمرة' => 'passports',
+                    'umrah' => 'passports',
+                    'خدمات الحج' => 'passports',
+                    'hajj' => 'passports',
+                    'خدمات البريد' => 'postal_shipments',
+                    'postal' => 'postal_shipments',
                     'حجوزات باص وطيران' => 'bus_flight_bookings',
                     'زيارة عائلية' => 'family_visit_requests',
                     'معاملات جواز' => 'passport_transactions'
@@ -973,9 +1052,8 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
             
             if ($type == 'all') {
                 $ids_to_reset[] = $row['id'];
-                // إذا تم تمرير فاتورة الشراء مباشرة (من bus_flight_bookings)
-                if (isset($_GET['reset_purchase'])) {
-                    $ids_to_reset[] = (int)$_GET['reset_purchase'];
+                if ($linked_invoice_id > 0) {
+                    $ids_to_reset[] = $linked_invoice_id;
                 } else {
                     if ($pur_id) $ids_to_reset[] = $pur_id;
                     if ($sal_id) $ids_to_reset[] = $sal_id;
@@ -1027,80 +1105,25 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
                     $stmt->execute([$ft_id]);
                     $voucher = $stmt->fetch(PDO::FETCH_ASSOC);
                     if ($voucher && $voucher['status'] == 'posted') {
-                        // عكس الأرصدة
-                        $stmt_lines = $pdo->prepare("SELECT account_id, debit, credit, currency_id, branch_id FROM journal_lines WHERE financial_transaction_id = ?");
-                        $stmt_lines->execute([$ft_id]);
-                        $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
-                        
-                        // Get branch_id from financial transaction if not on lines
-                        $stmt_branch = $pdo->prepare("SELECT branch_id FROM financial_transactions WHERE id = ?");
-                        $stmt_branch->execute([$ft_id]);
-                        $default_branch_id = $stmt_branch->fetchColumn();
-                        
-                        foreach ($lines as $line) {
-                            $account_id = $line['account_id'];
-                            $currency_id = $line['currency_id'];
-                            $line_branch_id = $line['branch_id'] ?? $default_branch_id;
-                            // Since we reversed the lines in the query, we use (credit - debit) to reverse
-                            $amount = $line['credit'] - $line['debit']; // reverse the change
-                            
-                            // Get exchange rate and currency code for base currency
-                            $stmt_curr = $pdo->prepare("SELECT exchange_rate, currency_code FROM currencies WHERE id = ?");
-                            $stmt_curr->execute([$currency_id]);
-                            $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
-                            $rate = (float)($curr['exchange_rate'] ?? 1);
-                            $currency_code = $curr['currency_code'] ?? '';
-                            $amount_base = $amount * $rate;
-                            
-                            // Update account balances
-                            // First check if the row exists
-                            if ($line_branch_id === null) {
-                                $stmt_check = $pdo->prepare("
-                                    SELECT id FROM account_balances_unified 
-                                    WHERE account_id = ? AND branch_id IS NULL AND currency_id = ?
-                                ");
-                                $stmt_check->execute([$account_id, $currency_id]);
-                            } else {
-                                $stmt_check = $pdo->prepare("
-                                    SELECT id FROM account_balances_unified 
-                                    WHERE account_id = ? AND branch_id = ? AND currency_id = ?
-                                ");
-                                $stmt_check->execute([$account_id, $line_branch_id, $currency_id]);
-                            }
-                            $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
-
-                            if ($exists) {
-                                // Update existing row
-                                $stmt_upd = $pdo->prepare("
-                                    UPDATE account_balances_unified 
-                                    SET 
-                                        current_balance = current_balance + ?, 
-                                        current_balance_base = current_balance_base + ?,
-                                        currency_code = ?
-                                    WHERE id = ?
-                                ");
-                                $stmt_upd->execute([$amount, $amount_base, $currency_code, $exists['id']]);
-                            } else {
-                                // Insert new row with all required columns
-                                $stmt_ins = $pdo->prepare("
-                                    INSERT INTO account_balances_unified (
-                                        account_id, branch_id, currency_id, currency_code,
-                                        opening_balance, current_balance, current_balance_base,
-                                        opening_balance_base, credit_limit, debit_limit, is_frozen
-                                    ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0)
-                                ");
-                                $stmt_ins->execute([$account_id, $line_branch_id, $currency_id, $currency_code, $amount, $amount_base]);
-                            }
+                        // أولاً: عكس تأثير القيد على الأرصدة BEFORE حذف سطور القيد
+                        if (!balances_triggers_enabled($pdo)) {
+                            apply_transaction_balances($pdo, (int)$ft_id, -1);
                         }
                         
-                        // حذف سطور القيد
+                        // ثانياً: حذف سطور القيد
                         $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$ft_id]);
                         
-                        // تحديث حالة المعاملة
-                        $stmt_reset = $pdo->prepare("UPDATE financial_transactions SET status = 'draft', posted_at = NULL, posted_by = NULL WHERE id = ?");
-                        $stmt_reset->execute([$ft_id]);
+                        // ثالثاً: تحديث حالة المعاملة إلى ملغي حتى لا تمنع إعادة ترحيل الفاتورة لاحقاً
+                        $stmt_reset = $pdo->prepare("
+                            UPDATE financial_transactions
+                            SET status = 'cancelled',
+                                updated_at = CURRENT_TIMESTAMP,
+                                updated_by = ?
+                            WHERE id = ?
+                        ");
+                        $stmt_reset->execute([$_SESSION['admin_id'], $ft_id]);
                         
-                        // إعادة حساب مبالغ الفواتير المرتبطة
+                        // رابعاً: إعادة حساب مبالغ الفواتير المرتبطة
                         $stmt_allocs = $pdo->prepare("SELECT DISTINCT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
                         $stmt_allocs->execute([$ft_id]);
                         $invoice_ids = $stmt_allocs->fetchAll(PDO::FETCH_COLUMN);
@@ -1109,7 +1132,7 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
                             php_recalculate_invoice_payment($pdo, $inv_id);
                         }
                         
-                        // تسجيل في audit_log
+                        // خامساً: تسجيل في audit_log
                         $stmt_after = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
                         $stmt_after->execute([$ft_id]);
                         $voucher_after = $stmt_after->fetch(PDO::FETCH_ASSOC);
@@ -1133,7 +1156,7 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
 
         $pdo->commit();
 
-        $return_to = !empty($_GET['return_to']) ? $_GET['return_to'] : 'invoices.php';
+        $return_to = invoice_safe_return_to($_POST['return_to'] ?? 'invoices.php');
         $separator = (strpos($return_to, '?') === false) ? '?' : '&';
         header("Location: " . $return_to . $separator . "reset=1");
         exit;
@@ -1143,14 +1166,20 @@ if (isset($_GET['reset_invoice']) || isset($_GET['unpost_invoice'])) {
     }
 }
 
-// ترحيل خدمة محاسبياً
-if (isset($_GET['post_invoice']) || isset($_GET['post_all'])) {
+// ترحيل خدمة محاسبياً عبر POST + CSRF فقط
+if (isset($_POST['invoice_action']) && $_POST['invoice_action'] === 'post_invoice') {
     try {
+        if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+            throw new Exception("خطأ في التحقق من الطلب (CSRF).");
+        }
+
         $user_id = $_SESSION['admin_id'];
         $ids_to_post = [];
+        $post_scope = $_POST['post_scope'] ?? 'single';
+        $linked_invoice_id = (int)($_POST['linked_invoice_id'] ?? 0);
 
-        if (isset($_GET['post_all'])) {
-            $main_id = (int)$_GET['post_all'];
+        if ($post_scope === 'all') {
+            $main_id = (int)($_POST['invoice_id'] ?? 0);
             // البحث عن الفاتورة المرتبطة (البيع والشراء)
             $stmt_all = $pdo->prepare("SELECT i.id, i.invoice_number, i.invoice_category, i.source_type FROM invoices i WHERE i.id = ?");
             $stmt_all->execute([$main_id]);
@@ -1158,6 +1187,10 @@ if (isset($_GET['post_invoice']) || isset($_GET['post_all'])) {
 
             if ($row_all) {
                 $ids_to_post[] = $row_all['id'];
+
+                if ($linked_invoice_id > 0) {
+                    $ids_to_post[] = $linked_invoice_id;
+                }
 
                 // استخراج البادئة من رقم الفاتورة الحالية
                 $current_prefix = '';
@@ -1172,21 +1205,21 @@ if (isset($_GET['post_invoice']) || isset($_GET['post_all'])) {
                     $linked_category = ($row_all['invoice_category'] == 'sales') ? 'purchase' : 'sales';
                     
                     // البحث عن الفاتورة المقابلة بنفس الرقم العددي
-                    $stmt_linked = $pdo->prepare("SELECT id, invoice_number FROM invoices WHERE invoice_number LIKE ? AND invoice_category = ? LIMIT 1");
-                    $stmt_linked->execute(['%' . $numeric_part, $linked_category]);
-                    $linked_row = $stmt_linked->fetch();
-                    if ($linked_row) {
-                        $ids_to_post[] = $linked_row['id'];
+                    if ($linked_invoice_id <= 0) {
+                        $stmt_linked = $pdo->prepare("SELECT id, invoice_number FROM invoices WHERE invoice_number LIKE ? AND invoice_category = ? LIMIT 1");
+                        $stmt_linked->execute(['%' . $numeric_part, $linked_category]);
+                        $linked_row = $stmt_linked->fetch();
+                        if ($linked_row) {
+                            $ids_to_post[] = $linked_row['id'];
+                        }
                     }
                 }
             }
         } else {
-            $ids_to_post[] = (int)$_GET['post_invoice'];
-            // إذا تم تمرير فاتورة الشراء مباشرة (من bus_flight_bookings)
-            if (isset($_GET['post_purchase'])) {
-                $ids_to_post[] = (int)$_GET['post_purchase'];
-            }
+            $ids_to_post[] = (int)($_POST['invoice_id'] ?? 0);
         }
+
+        $ids_to_post = array_values(array_unique(array_filter(array_map('intval', $ids_to_post))));
 
         foreach ($ids_to_post as $st_id) {
             // جلب البيانات قبل الترحيل
@@ -1215,7 +1248,7 @@ if (isset($_GET['post_invoice']) || isset($_GET['post_all'])) {
             log_audit($pdo, 'post', 'invoices', $st_id, $inv_before, $inv_after, "ترحيل الفاتورة محاسبياً");
         }
 
-        $return_to = !empty($_GET['return_to']) ? $_GET['return_to'] : 'invoices.php';
+        $return_to = invoice_safe_return_to($_POST['return_to'] ?? 'invoices.php');
         $separator = (strpos($return_to, '?') === false) ? '?' : '&';
         header("Location: " . $return_to . $separator . "posted=1");
         exit;
@@ -1224,15 +1257,47 @@ if (isset($_GET['post_invoice']) || isset($_GET['post_all'])) {
     }
 }
 
-// حذف فاتورة
-if (isset($_GET['delete_invoice'])) {
+// حذف فاتورة عبر POST + CSRF فقط
+if (isset($_POST['invoice_action']) && $_POST['invoice_action'] === 'delete_invoice') {
     try {
-        $id = (int)$_GET['delete_invoice'];
+        if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+            throw new Exception("خطأ في التحقق من الطلب (CSRF).");
+        }
+
+        $id = (int)($_POST['invoice_id'] ?? 0);
+        $return_to = invoice_safe_return_to($_POST['return_to'] ?? 'invoices.php');
+        $delete_scope = $_POST['delete_scope'] ?? '';
+        $linked_invoice_id = (int)($_POST['linked_id'] ?? 0);
+        $source_type = $_POST['source_type'] ?? '';
+        $source_id = (int)($_POST['source_id'] ?? 0);
 
         // 1. التحقق من وجود فاتورة مرتبطة ديناميكياً بناءً على إعدادات الخدمة
-        $stmt_current = $pdo->prepare("SELECT id, invoice_number, invoice_category, source_type FROM invoices WHERE id = ?");
+        $stmt_current = $pdo->prepare("SELECT id, invoice_number, invoice_category, source_type, source_id FROM invoices WHERE id = ?");
         $stmt_current->execute([$id]);
         $current_inv = $stmt_current->fetch(PDO::FETCH_ASSOC);
+
+        // If invoice not found by id, try by source_type and source_id
+        if (!$current_inv && $source_type && $source_id) {
+            // Try to find the invoice by source_type and source_id
+            $stmt_current = $pdo->prepare("SELECT id, invoice_number, invoice_category, source_type, source_id FROM invoices WHERE source_type = ? AND source_id = ? AND invoice_category = ? LIMIT 1");
+            // Determine invoice_category based on delete button clicked
+            $category = 'sales';
+            if (isset($_POST['delete_scope']) && $_POST['delete_scope'] === 'self') {
+                // Check which button was clicked: if we're deleting purchase, category is purchase
+                // We can guess based on source_type and which id we had
+                $stmt_check_purchase = $pdo->prepare("SELECT id FROM invoices WHERE source_type = ? AND source_id = ? AND invoice_category = 'purchase' LIMIT 1");
+                $stmt_check_purchase->execute([$source_type, $source_id]);
+                $purchase_inv = $stmt_check_purchase->fetchColumn();
+                if ($purchase_inv && $linked_invoice_id === 0) {
+                    $category = 'purchase';
+                }
+            }
+            $stmt_current->execute([$source_type, $source_id, $category]);
+            $current_inv = $stmt_current->fetch(PDO::FETCH_ASSOC);
+            if ($current_inv) {
+                $id = $current_inv['id'];
+            }
+        }
 
         if (!$current_inv) {
             $error_msg = "الفاتورة غير موجودة.";
@@ -1249,26 +1314,46 @@ if (isset($_GET['delete_invoice'])) {
             $stmt_linked->execute([$linked_num]);
             $linked_inv = $stmt_linked->fetch(PDO::FETCH_ASSOC);
 
-            $confirm_self = isset($_GET['confirm_linked']);
-            $delete_both = isset($_GET['delete_both']);
-            $delete_linked_only = isset($_GET['delete_linked_only']);
-
-            if ($linked_inv && !$confirm_self && !$delete_both && !$delete_linked_only) {
-                $return_param = !empty($_GET['return_to']) ? '&return_to=' . urlencode($_GET['return_to']) : '';
+            if ($linked_inv && $delete_scope === '') {
                 $self_label = ($current_inv['invoice_category'] === 'sales') ? 'حذف فاتورة البيع فقط' : 'حذف فاتورة الشراء فقط';
                 $linked_label = ($current_inv['invoice_category'] === 'sales') ? 'حذف فاتورة الشراء فقط' : 'حذف فاتورة البيع فقط';
-                $error_msg = "تنبيه: هذه الفاتورة مرتبطة بالفاتورة (" . $linked_inv['invoice_number'] . "). هل تريد حذفها فقط أم حذفهما معاً؟ <br><br>
-                              <a href='invoices.php?delete_invoice=$id&confirm_linked=1$return_param' class='btn btn-sm btn-danger rounded-pill me-1'>$self_label</a>
-                              <a href='invoices.php?delete_invoice=$id&delete_linked_only=1&linked_id=" . (int)$linked_inv['id'] . "$return_param' class='btn btn-sm btn-warning rounded-pill me-1'>$linked_label</a>
-                              <a href='invoices.php?delete_invoice=$id&delete_both=" . (int)$linked_inv['id'] . "$return_param' class='btn btn-sm btn-dark rounded-pill'>حذف الكل</a>";
+                $error_msg = "تنبيه: هذه الفاتورة مرتبطة بالفاتورة (" . $linked_inv['invoice_number'] . "). هل تريد حذفها فقط أم حذفهما معاً؟ <br><br>"
+                    . "<div class='d-flex flex-wrap gap-2'>"
+                    . "<form method='post' class='d-inline-block mb-0'>"
+                    . csrf_input()
+                    . "<input type='hidden' name='invoice_action' value='delete_invoice'>"
+                    . "<input type='hidden' name='invoice_id' value='" . (int)$id . "'>"
+                    . "<input type='hidden' name='delete_scope' value='self'>"
+                    . "<input type='hidden' name='return_to' value='" . htmlspecialchars($return_to, ENT_QUOTES, 'UTF-8') . "'>"
+                    . "<button type='submit' class='btn btn-sm btn-danger rounded-pill'>$self_label</button>"
+                    . "</form>"
+                    . "<form method='post' class='d-inline-block mb-0'>"
+                    . csrf_input()
+                    . "<input type='hidden' name='invoice_action' value='delete_invoice'>"
+                    . "<input type='hidden' name='invoice_id' value='" . (int)$id . "'>"
+                    . "<input type='hidden' name='delete_scope' value='linked_only'>"
+                    . "<input type='hidden' name='linked_id' value='" . (int)$linked_inv['id'] . "'>"
+                    . "<input type='hidden' name='return_to' value='" . htmlspecialchars($return_to, ENT_QUOTES, 'UTF-8') . "'>"
+                    . "<button type='submit' class='btn btn-sm btn-warning rounded-pill'>$linked_label</button>"
+                    . "</form>"
+                    . "<form method='post' class='d-inline-block mb-0'>"
+                    . csrf_input()
+                    . "<input type='hidden' name='invoice_action' value='delete_invoice'>"
+                    . "<input type='hidden' name='invoice_id' value='" . (int)$id . "'>"
+                    . "<input type='hidden' name='delete_scope' value='both'>"
+                    . "<input type='hidden' name='linked_id' value='" . (int)$linked_inv['id'] . "'>"
+                    . "<input type='hidden' name='return_to' value='" . htmlspecialchars($return_to, ENT_QUOTES, 'UTF-8') . "'>"
+                    . "<button type='submit' class='btn btn-sm btn-dark rounded-pill'>حذف الكل</button>"
+                    . "</form>"
+                    . "</div>";
             } else {
                 $ids_to_delete = [];
 
-                if ($delete_both) {
+                if ($delete_scope === 'both') {
                     $ids_to_delete[] = $id;
-                    $ids_to_delete[] = (int)$_GET['delete_both'];
-                } elseif ($delete_linked_only) {
-                    $ids_to_delete[] = (int)($_GET['linked_id'] ?? 0);
+                    $ids_to_delete[] = $linked_invoice_id ?: (int)($linked_inv['id'] ?? 0);
+                } elseif ($delete_scope === 'linked_only') {
+                    $ids_to_delete[] = $linked_invoice_id ?: (int)($linked_inv['id'] ?? 0);
                 } else {
                     $ids_to_delete[] = $id;
                 }
@@ -1277,7 +1362,29 @@ if (isset($_GET['delete_invoice'])) {
                 if (empty($ids_to_delete)) {
                     $error_msg = "لم يتم تحديد فاتورة للحذف.";
                 } else {
-                    // 2. تحقق قبل الحذف: لا يوجد سداد مرتبط + الحالة مسودة
+                    $booking_ids_to_delete = [];
+                    $stmt_invoice_source = $pdo->prepare("SELECT source_type, source_id FROM invoices WHERE id = ?");
+                    $stmt_booking_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type IN ($booking_service_source_placeholders) AND source_id = ?");
+
+                    foreach ($ids_to_delete as $candidate_invoice_id) {
+                        $stmt_invoice_source->execute([$candidate_invoice_id]);
+                        $invoice_source = $stmt_invoice_source->fetch(PDO::FETCH_ASSOC);
+                        $source_type = trim((string)($invoice_source['source_type'] ?? ''));
+                        $source_id = (int)($invoice_source['source_id'] ?? 0);
+
+                        if ($source_id > 0 && in_array($source_type, $booking_service_source_aliases, true)) {
+                            $booking_ids_to_delete[] = $source_id;
+                        }
+                    }
+
+                    $booking_ids_to_delete = array_values(array_unique(array_filter($booking_ids_to_delete)));
+                    foreach ($booking_ids_to_delete as $booking_id_to_delete) {
+                        $stmt_booking_inv->execute(array_merge($booking_service_source_aliases, [$booking_id_to_delete]));
+                        $booking_invoice_ids = $stmt_booking_inv->fetchAll(PDO::FETCH_COLUMN);
+                        $ids_to_delete = array_values(array_unique(array_merge($ids_to_delete, array_map('intval', $booking_invoice_ids))));
+                    }
+
+                    // 2. تحقق قبل الحذف: لا يوجد سداد مرتبط + الحالة مسودة أو ملغية
                     foreach ($ids_to_delete as $del_id) {
                         // التحقق من وجود أي سدادات خارجية (ليست القيد الابتدائي للفاتورة)
                         $stmt_vouchers = $pdo->prepare("
@@ -1308,153 +1415,202 @@ if (isset($_GET['delete_invoice'])) {
                         $stmt_check = $pdo->prepare("SELECT invoice_status FROM invoices WHERE id = ?");
                         $stmt_check->execute([$del_id]);
                         $status = $stmt_check->fetchColumn();
-                        if ($status !== 'draft') {
-                            $error_msg = "لا يمكن حذف فاتورة مرحلة أو ملغاة. يرجى إعادتها لمسودة أولاً.";
+                        if (!in_array($status, ['draft', 'cancelled'], true)) {
+                            $error_msg = "لا يمكن حذف الفاتورة إلا إذا كانت مسودة أو ملغية.";
                             break;
                         }
                     }
 
                     if (empty($error_msg)) {
-                        $stmt_before_delete = $pdo->prepare("SELECT * FROM invoices WHERE id = ?");
-                        $stmt_del = $pdo->prepare("DELETE FROM invoices WHERE id = ?");
+                        $pdo->beginTransaction();
+                        
+                        try {
+                            $stmt_before_delete = $pdo->prepare("SELECT * FROM invoices WHERE id = ?");
+                            $stmt_del = $pdo->prepare("DELETE FROM invoices WHERE id = ?");
 
-                        // إضافة مصفوفة لتتبع معاملات العمرة التي يجب حذفها لتجنب التكرار
-                        $umrah_ids_to_delete = [];
+                            // إضافة مصفوفة لتتبع معاملات العمرة التي يجب حذفها لتجنب التكرار
+                            $umrah_ids_to_delete = [];
+                            $family_visit_ids_to_delete = [];
+                            $passport_transaction_ids_to_delete = [];
 
-                        foreach ($ids_to_delete as $del_id) {
-                            $stmt_before_delete->execute([$del_id]);
-                            $old_invoice = $stmt_before_delete->fetch(PDO::FETCH_ASSOC);
+                            foreach ($ids_to_delete as $del_id) {
+                                $stmt_before_delete->execute([$del_id]);
+                                $old_invoice = $stmt_before_delete->fetch(PDO::FETCH_ASSOC);
 
-                            if ($old_invoice) {
-                                // --- إضافة منطق حذف financial_transactions و journal_lines هنا ---
-                                $inv_num = $old_invoice['invoice_number'] ?? null;
-                                if ($inv_num) {
-                                    $numeric_inv_num = preg_replace('/[^0-9]/', '', $inv_num);
+                                if ($old_invoice) {
+                                    // --- الحذف الكامل لكل ما يتعلق بالفاتورة ---
+                                    $inv_num = $old_invoice['invoice_number'] ?? null;
+                                    if ($inv_num) {
+                                        $numeric_inv_num = preg_replace('/[^0-9]/', '', $inv_num);
 
-                                    $stmt_ft = $pdo->prepare("
-                                            SELECT id FROM financial_transactions
-                                            WHERE
-                                                (transaction_number = ? OR reference_number = ?) -- Original full invoice number
-                                                OR
-                                                (transaction_number = ? OR reference_number = ?) -- Numeric part of invoice number
-                                                OR
-                                                (reference_id = ? AND reference_type = 'invoice')
-                                        ");
-                                    $stmt_ft->execute([
-                                        $inv_num,
-                                        $inv_num,
-                                        $numeric_inv_num,
-                                        $numeric_inv_num,
-                                        $del_id
-                                    ]);
-                                    $ft_ids = $stmt_ft->fetchAll(PDO::FETCH_COLUMN);
+                                        // 1. إيجاد كل المعاملات المالية المرتبطة
+                                        $stmt_ft = $pdo->prepare("
+                                                SELECT id FROM financial_transactions
+                                                WHERE
+                                                    (transaction_number = ? OR reference_number = ?) -- Original full invoice number
+                                                    OR
+                                                    (transaction_number = ? OR reference_number = ?) -- Numeric part of invoice number
+                                                    OR
+                                                    (reference_id = ? AND reference_type = 'invoice')
+                                            ");
+                                        $stmt_ft->execute([
+                                            $inv_num,
+                                            $inv_num,
+                                            $numeric_inv_num,
+                                            $numeric_inv_num,
+                                            $del_id
+                                        ]);
+                                        $ft_ids = $stmt_ft->fetchAll(PDO::FETCH_COLUMN);
 
-                                    foreach ($ft_ids as $ft_id) {
-                                        // إلغاء ترحيل المعاملة المالية
-                                        $stmt = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
-                                        $stmt->execute([$ft_id]);
-                                        $voucher = $stmt->fetch(PDO::FETCH_ASSOC);
-                                        if ($voucher && $voucher['status'] == 'posted') {
-                                            // عكس الأرصدة
-                                            $stmt_lines = $pdo->prepare("SELECT account_id, debit, credit, currency_id, branch_id FROM journal_lines WHERE financial_transaction_id = ?");
-                                            $stmt_lines->execute([$ft_id]);
-                                            $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
+                                        foreach ($ft_ids as $ft_id) {
+                                            // أولاً: إلغاء الترحيل وتصحيح الأرصدة إن كانت مرحلة
+                                            $stmt_ft_check = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
+                                            $stmt_ft_check->execute([$ft_id]);
+                                            $voucher = $stmt_ft_check->fetch(PDO::FETCH_ASSOC);
                                             
-                                            // Get branch_id from financial transaction if not on lines
-                                            $stmt_branch = $pdo->prepare("SELECT branch_id FROM financial_transactions WHERE id = ?");
-                                            $stmt_branch->execute([$ft_id]);
-                                            $default_branch_id = $stmt_branch->fetchColumn();
-                                            
-                                            foreach ($lines as $line) {
-                                                $account_id = $line['account_id'];
-                                                $currency_id = $line['currency_id'];
-                                                $line_branch_id = $line['branch_id'] ?? $default_branch_id;
-                                                // Since we reversed the lines in the query, we use (credit - debit) to reverse
-                                                $amount = $line['credit'] - $line['debit']; // reverse the change
-                                                
-                                                // Get exchange rate and currency code for base currency
-                                                $stmt_curr = $pdo->prepare("SELECT exchange_rate, currency_code FROM currencies WHERE id = ?");
-                                                $stmt_curr->execute([$currency_id]);
-                                                $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
-                                                $rate = (float)($curr['exchange_rate'] ?? 1);
-                                                $currency_code = $curr['currency_code'] ?? '';
-                                                $amount_base = $amount * $rate;
-                                                
-                                                // Update account balances
-                                                // First check if the row exists
-                                                if ($line_branch_id === null) {
-                                                    $stmt_check = $pdo->prepare("
-                                                        SELECT id FROM account_balances_unified 
-                                                        WHERE account_id = ? AND branch_id IS NULL AND currency_id = ?
-                                                    ");
-                                                    $stmt_check->execute([$account_id, $currency_id]);
-                                                } else {
-                                                    $stmt_check = $pdo->prepare("
-                                                        SELECT id FROM account_balances_unified 
-                                                        WHERE account_id = ? AND branch_id = ? AND currency_id = ?
-                                                    ");
-                                                    $stmt_check->execute([$account_id, $line_branch_id, $currency_id]);
-                                                }
-                                                $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
-
-                                                if ($exists) {
-                                                    // Update existing row
-                                                    $stmt_upd = $pdo->prepare("
-                                                        UPDATE account_balances_unified 
-                                                        SET 
-                                                            current_balance = current_balance + ?, 
-                                                            current_balance_base = current_balance_base + ?,
-                                                            currency_code = ?
-                                                        WHERE id = ?
-                                                    ");
-                                                    $stmt_upd->execute([$amount, $amount_base, $currency_code, $exists['id']]);
-                                                } else {
-                                                    // Insert new row with all required columns
-                                                    $stmt_ins = $pdo->prepare("
-                                                        INSERT INTO account_balances_unified (
-                                                            account_id, branch_id, currency_id, currency_code,
-                                                            opening_balance, current_balance, current_balance_base,
-                                                            opening_balance_base, credit_limit, debit_limit, is_frozen
-                                                        ) VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0)
-                                                    ");
-                                                    $stmt_ins->execute([$account_id, $line_branch_id, $currency_id, $currency_code, $amount, $amount_base]);
-                                                }
+                                            if ($voucher && $voucher['status'] == 'posted' && !balances_triggers_enabled($pdo)) {
+                                                apply_transaction_balances($pdo, (int)$ft_id, -1);
                                             }
                                             
-                                            // حذف سطور القيد
+                                            // 2. حذف تخصيصات المدفوعات
+                                            $pdo->prepare("DELETE FROM payment_allocations WHERE financial_transaction_id = ?")->execute([$ft_id]);
+                                            
+                                            // 3. حذف خطوط الدفتر اليومي
                                             $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$ft_id]);
                                             
-                                            // تحديث حالة المعاملة
-                                            $stmt_reset = $pdo->prepare("UPDATE financial_transactions SET status = 'draft', posted_at = NULL, posted_by = NULL WHERE id = ?");
-                                            $stmt_reset->execute([$ft_id]);
-                                            
-                                            // إعادة حساب مبالغ الفواتير المرتبطة
-                                            $stmt_allocs = $pdo->prepare("SELECT DISTINCT invoice_id FROM payment_allocations WHERE financial_transaction_id = ?");
-                                            $stmt_allocs->execute([$ft_id]);
-                                            $invoice_ids = $stmt_allocs->fetchAll(PDO::FETCH_COLUMN);
-                                            
-                                            foreach ($invoice_ids as $inv_id) {
-                                                php_recalculate_invoice_payment($pdo, $inv_id);
-                                            }
-                                            
-                                            // تسجيل في audit_log
-                                            $stmt_after = $pdo->prepare("SELECT * FROM financial_transactions WHERE id = ?");
-                                            $stmt_after->execute([$ft_id]);
-                                            $voucher_after = $stmt_after->fetch(PDO::FETCH_ASSOC);
-                                            log_audit($pdo, 'unpost', 'financial_transactions', $ft_id, $voucher, $voucher_after, "إلغاء ترحيل سند مرتبط بفاتورة");
+                                            // 4. حذف المعاملة المالية نفسها
+                                            $pdo->prepare("DELETE FROM financial_transactions WHERE id = ?")->execute([$ft_id]);
                                         }
                                     }
-                                }
-                                // --- نهاية منطق حذف financial_transactions و journal_lines ---
+                                    // --- نهاية الحذف الكامل ---
 
-                                // إذا كانت الفاتورة مرتبطة بمعاملة عمرة، نضيف معرف المعاملة للمصفوفة
-                                if ($old_invoice['source_type'] == 'حج وعمرة' && !empty($old_invoice['source_id'])) {
-                                    $umrah_ids_to_delete[] = $old_invoice['source_id'];
-                                }
+                                    // إذا كانت الفاتورة مرتبطة بمعاملة عمرة، نضيف معرف المعاملة للمصفوفة
+                                    if ((is_umrah_service($old_invoice['source_type'] ?? '') || is_hajj_service($old_invoice['source_type'] ?? '')) && !empty($old_invoice['source_id'])) {
+                                        $umrah_ids_to_delete[] = $old_invoice['source_id'];
+                                    }
+                                    if (in_array($old_invoice['source_type'] ?? '', $family_visit_source_aliases, true) && !empty($old_invoice['source_id'])) {
+                                        $family_visit_ids_to_delete[] = $old_invoice['source_id'];
+                                    }
+                                    if (in_array($old_invoice['source_type'] ?? '', $passport_transaction_source_aliases, true) && !empty($old_invoice['source_id'])) {
+                                        $passport_transaction_ids_to_delete[] = $old_invoice['source_id'];
+                                    }
 
-                                $stmt_del->execute([$del_id]);
-                                log_audit($pdo, 'delete', 'invoices', $del_id, $old_invoice, null, 'حذف فاتورة');
+                                    $stmt_del->execute([$del_id]);
+                                    log_audit($pdo, 'delete', 'invoices', $del_id, $old_invoice, null, 'حذف فاتورة');
+                                }
                             }
+
+                            // حذف معاملات العمرة المرتبطة
+                            if (!empty($umrah_ids_to_delete)) {
+                                $umrah_ids_to_delete = array_unique($umrah_ids_to_delete);
+                                foreach ($umrah_ids_to_delete as $passport_id) {
+                                    // 1. حذف تفاصيل العمرة
+                                    $pdo->prepare("DELETE FROM umrah_details WHERE passport_id = ?")->execute([$passport_id]);
+
+                                    // 2. حذف أي فواتير أخرى مرتبطة بنفس المعاملة لم يتم تحديدها للحذف بعد
+                                    $stmt_other_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type IN ($passport_service_source_placeholders) AND source_id = ?");
+                                    $stmt_other_inv->execute(array_merge($passport_service_source_aliases, [$passport_id]));
+                                    $other_inv_ids = $stmt_other_inv->fetchAll(PDO::FETCH_COLUMN);
+
+                                    foreach ($other_inv_ids as $other_id) {
+                                        if (!in_array($other_id, $ids_to_delete)) {
+                                            $stmt_before_delete->execute([$other_id]);
+                                            $other_inv_data = $stmt_before_delete->fetch(PDO::FETCH_ASSOC);
+                                            $pdo->prepare("DELETE FROM invoices WHERE id = ?")->execute([$other_id]);
+                                            if ($other_inv_data) {
+                                                log_audit($pdo, 'delete', 'invoices', $other_id, $other_inv_data, null, 'حذف فاتورة مرتبطة بمعاملة عمره محذوفة');
+                                            }
+                                        }
+                                    }
+
+                                    // 3. حذف المعاملة (جواز السفر)
+                                    $pdo->prepare("DELETE FROM passports WHERE id = ?")->execute([$passport_id]);
+                                    log_audit($pdo, 'delete', 'passports', $passport_id, null, null, 'حذف معاملة عمره بالكامل بسبب حذف الفاتورة');
+                                }
+                            }
+
+                            if (!empty($booking_ids_to_delete)) {
+                                $booking_ids_to_delete = array_unique($booking_ids_to_delete);
+                                $stmt_booking_before_delete = $pdo->prepare("SELECT * FROM bus_flight_bookings WHERE id = ?");
+                                foreach ($booking_ids_to_delete as $booking_id_to_delete) {
+                                    $stmt_booking_before_delete->execute([$booking_id_to_delete]);
+                                    $booking_before = $stmt_booking_before_delete->fetch(PDO::FETCH_ASSOC);
+
+                                    $pdo->prepare("DELETE FROM workflow_approval_requests WHERE booking_id = ?")->execute([$booking_id_to_delete]);
+                                    $pdo->prepare("DELETE FROM bus_flight_bookings WHERE id = ?")->execute([$booking_id_to_delete]);
+
+                                    log_audit($pdo, 'delete', 'bus_flight_bookings', $booking_id_to_delete, $booking_before ?: null, null, 'حذف الحجز بالكامل بسبب حذف الفاتورة المرتبطة');
+                                }
+                            }
+
+                            // حذف معاملات زيارة عائلية المرتبطة
+                            if (!empty($family_visit_ids_to_delete)) {
+                                $family_visit_ids_to_delete = array_unique($family_visit_ids_to_delete);
+                                $stmt_family_visit_before_delete = $pdo->prepare("SELECT * FROM family_visit_requests WHERE id = ?");
+                                foreach ($family_visit_ids_to_delete as $family_visit_id) {
+                                    $stmt_family_visit_before_delete->execute([$family_visit_id]);
+                                    $family_visit_before = $stmt_family_visit_before_delete->fetch(PDO::FETCH_ASSOC);
+
+                                    // 1. حذف الأفراد
+                                    $pdo->prepare("DELETE FROM family_visit_individuals WHERE request_id = ?")->execute([$family_visit_id]);
+
+                                    // 2. حذف أي فواتير أخرى مرتبطة بنفس المعاملة لم يتم تحديدها للحذف بعد
+                                    $stmt_other_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type IN ($family_visit_source_placeholders) AND source_id = ?");
+                                    $stmt_other_inv->execute(array_merge($family_visit_source_aliases, [$family_visit_id]));
+                                    $other_inv_ids = $stmt_other_inv->fetchAll(PDO::FETCH_COLUMN);
+
+                                    foreach ($other_inv_ids as $other_id) {
+                                        if (!in_array($other_id, $ids_to_delete)) {
+                                            $stmt_before_delete->execute([$other_id]);
+                                            $other_inv_data = $stmt_before_delete->fetch(PDO::FETCH_ASSOC);
+                                            $pdo->prepare("DELETE FROM invoices WHERE id = ?")->execute([$other_id]);
+                                            if ($other_inv_data) {
+                                                log_audit($pdo, 'delete', 'invoices', $other_id, $other_inv_data, null, 'حذف فاتورة مرتبطة بمعاملة زيارة عائلية محذوفة');
+                                            }
+                                        }
+                                    }
+
+                                    // 3. حذف المعاملة الرئيسية
+                                    $pdo->prepare("DELETE FROM family_visit_requests WHERE id = ?")->execute([$family_visit_id]);
+                                    log_audit($pdo, 'delete', 'family_visit_requests', $family_visit_id, $family_visit_before ?: null, null, 'حذف معاملة زيارة عائلية بالكامل بسبب حذف الفاتورة');
+                                }
+                            }
+
+                            // حذف معاملات جواز السفر المرتبطة
+                            if (!empty($passport_transaction_ids_to_delete)) {
+                                $passport_transaction_ids_to_delete = array_unique($passport_transaction_ids_to_delete);
+                                $stmt_passport_transaction_before_delete = $pdo->prepare("SELECT * FROM passport_transactions WHERE id = ?");
+                                foreach ($passport_transaction_ids_to_delete as $passport_transaction_id) {
+                                    $stmt_passport_transaction_before_delete->execute([$passport_transaction_id]);
+                                    $passport_transaction_before = $stmt_passport_transaction_before_delete->fetch(PDO::FETCH_ASSOC);
+
+                                    // 1. حذف أي فواتير أخرى مرتبطة بنفس المعاملة لم يتم تحديدها للحذف بعد
+                                    $stmt_other_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type IN ($passport_transaction_source_placeholders) AND source_id = ?");
+                                    $stmt_other_inv->execute(array_merge($passport_transaction_source_aliases, [$passport_transaction_id]));
+                                    $other_inv_ids = $stmt_other_inv->fetchAll(PDO::FETCH_COLUMN);
+
+                                    foreach ($other_inv_ids as $other_id) {
+                                        if (!in_array($other_id, $ids_to_delete)) {
+                                            $stmt_before_delete->execute([$other_id]);
+                                            $other_inv_data = $stmt_before_delete->fetch(PDO::FETCH_ASSOC);
+                                            $pdo->prepare("DELETE FROM invoices WHERE id = ?")->execute([$other_id]);
+                                            if ($other_inv_data) {
+                                                log_audit($pdo, 'delete', 'invoices', $other_id, $other_inv_data, null, 'حذف فاتورة مرتبطة بمعاملة جواز سحر محذوفة');
+                                            }
+                                        }
+                                    }
+
+                                    // 2. حذف المعاملة الرئيسية
+                                    $pdo->prepare("DELETE FROM passport_transactions WHERE id = ?")->execute([$passport_transaction_id]);
+                                    log_audit($pdo, 'delete', 'passport_transactions', $passport_transaction_id, $passport_transaction_before ?: null, null, 'حذف معاملة جواز سحر بالكامل بسبب حذف الفاتورة');
+                                }
+                            }
+
+                            $pdo->commit();
+                            $success_msg = "تم حذف الفاتورة وكل ما يتعلق بها بنجاح.";
+                        } catch (Exception $e) {
+                            $pdo->rollBack();
+                            $error_msg = "خطأ في الحذف: " . $e->getMessage();
                         }
 
                         // حذف معاملات العمرة المرتبطة
@@ -1465,8 +1621,8 @@ if (isset($_GET['delete_invoice'])) {
                                 $pdo->prepare("DELETE FROM umrah_details WHERE passport_id = ?")->execute([$passport_id]);
 
                                 // 2. حذف أي فواتير أخرى مرتبطة بنفس المعاملة لم يتم تحديدها للحذف بعد
-                                $stmt_other_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type = 'حج وعمرة' AND source_id = ?");
-                                $stmt_other_inv->execute([$passport_id]);
+                                $stmt_other_inv = $pdo->prepare("SELECT id FROM invoices WHERE source_type IN ($passport_service_source_placeholders) AND source_id = ?");
+                                $stmt_other_inv->execute(array_merge($passport_service_source_aliases, [$passport_id]));
                                 $other_inv_ids = $stmt_other_inv->fetchAll(PDO::FETCH_COLUMN);
 
                                 foreach ($other_inv_ids as $other_id) {
@@ -1487,7 +1643,6 @@ if (isset($_GET['delete_invoice'])) {
                             }
                         }
 
-                        $return_to = !empty($_GET['return_to']) ? $_GET['return_to'] : 'invoices.php';
                         $separator = (strpos($return_to, '?') === false) ? '?' : '&';
                         header("Location: " . $return_to . $separator . "deleted=1");
                         exit;
@@ -1508,11 +1663,11 @@ $params = [];
 
 if (!empty($_GET['from_date'])) {
     $where .= " AND invoice_date >= ?";
-    $params[] = $_GET['from_date'];
+    $params[] = normalize_date_filter_start($_GET['from_date']);
 }
 if (!empty($_GET['to_date'])) {
     $where .= " AND invoice_date <= ?";
-    $params[] = $_GET['to_date'];
+    $params[] = normalize_date_filter_end($_GET['to_date']);
 }
 if (!empty($_GET['invoice_category'])) {
     $where .= " AND invoice_category = ?";
@@ -1537,8 +1692,20 @@ if (!empty($_GET['q'])) {
     $params[] = $search;
 }
 if (!empty($_GET['service_type'])) {
-    $where .= " AND i.source_type = ?";
-    $params[] = $_GET['service_type'];
+    $selected_service_type = trim((string)$_GET['service_type']);
+    if (is_umrah_service($selected_service_type)) {
+        $where .= " AND i.source_type IN ($umrah_source_placeholders)";
+        $params = array_merge($params, $umrah_source_aliases);
+    } elseif (is_hajj_service($selected_service_type)) {
+        $where .= " AND i.source_type IN ($hajj_source_placeholders)";
+        $params = array_merge($params, $hajj_source_aliases);
+    } elseif (is_postal_service($selected_service_type)) {
+        $where .= " AND i.source_type IN ($postal_source_placeholders)";
+        $params = array_merge($params, $postal_source_aliases);
+    } else {
+        $where .= " AND i.source_type = ?";
+        $params[] = $selected_service_type;
+    }
 }
 
 // جلب إعدادات الترقيم العامة للاستعلام
@@ -1888,6 +2055,342 @@ try {
     .modal-footer button[name="update_invoice"] {
         background-color: #007aff !important;
     }
+
+    #newInvoiceModal .modal-dialog,
+    #editInvoiceModal .modal-dialog {
+        max-width: min(1380px, calc(100vw - 1.5rem));
+        margin: 0.75rem auto;
+    }
+
+    #newInvoiceModal .modal-content,
+    #editInvoiceModal .modal-content {
+        min-height: 0;
+        height: calc(100vh - 1.5rem);
+        max-height: calc(100vh - 1.5rem);
+        overflow: hidden;
+        border-radius: 1.5rem !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+
+    #newInvoiceModal form,
+    #editInvoiceModal form {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    #newInvoiceModal .modal-body,
+    #editInvoiceModal .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-bottom: 1rem !important;
+    }
+
+    #newInvoiceModal .modal-header,
+    #editInvoiceModal .modal-header {
+        flex-shrink: 0;
+        padding: 1rem 1.5rem;
+    }
+
+    #newInvoiceModal .modal-footer,
+    #editInvoiceModal .modal-footer {
+        flex-shrink: 0;
+        position: sticky;
+        bottom: 0;
+        z-index: 8;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding: 0.9rem 1.25rem !important;
+        border-top: 1px solid rgba(203, 213, 225, 0.9) !important;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.98) 100%) !important;
+        box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.08);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    #newInvoiceModal .modal-footer .btn,
+    #editInvoiceModal .modal-footer .btn {
+        min-width: 150px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        white-space: nowrap;
+        border-radius: 999px !important;
+    }
+
+    #newInvoiceModal .modal-footer .btn-outline-secondary,
+    #editInvoiceModal .modal-footer .btn-outline-secondary {
+        border-color: #cbd5e1;
+        color: #475569;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+    }
+
+    #newInvoiceModal .modal-footer .btn-outline-secondary:hover,
+    #editInvoiceModal .modal-footer .btn-outline-secondary:hover {
+        background: #eef2f7;
+        color: #334155;
+        border-color: #94a3b8;
+    }
+
+    #newInvoiceModal .modal-footer button[name="add_invoice"],
+    #editInvoiceModal .modal-footer button[name="update_invoice"] {
+        min-width: 210px;
+        box-shadow: 0 10px 22px rgba(0, 122, 255, 0.28) !important;
+    }
+
+    #newInvoiceModal .modal-footer button[name="add_invoice"] {
+        padding: 0.95rem 2rem !important;
+        font-size: 1.02rem !important;
+        border-radius: 999px !important;
+    }
+
+    #editInvoiceModal .modal-footer button[name="update_invoice"] {
+        padding: 0.85rem 1.75rem !important;
+        font-size: 1rem !important;
+        border-radius: 999px !important;
+    }
+
+    @media (max-width: 767.98px) {
+        #newInvoiceModal .modal-dialog,
+        #editInvoiceModal .modal-dialog {
+            max-width: calc(100vw - 0.75rem);
+            margin: 0.375rem auto;
+        }
+
+        #newInvoiceModal .modal-content,
+        #editInvoiceModal .modal-content {
+            height: calc(100vh - 0.75rem);
+            max-height: calc(100vh - 0.75rem);
+        }
+
+        #newInvoiceModal .modal-footer,
+        #editInvoiceModal .modal-footer {
+            justify-content: stretch;
+        }
+
+        #newInvoiceModal .modal-footer .btn,
+        #editInvoiceModal .modal-footer .btn {
+            width: 100%;
+            min-width: 0;
+        }
+    }
+
+    .invoice-alert-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
+    }
+
+    .invoice-page-alert {
+        position: relative;
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1rem 3.25rem 1rem 1rem;
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid transparent;
+    }
+
+    .invoice-page-alert::before {
+        content: '';
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 4px;
+        background: currentColor;
+        opacity: 0.9;
+    }
+
+    .invoice-page-alert .btn-close {
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        opacity: 0.75;
+    }
+
+    .invoice-page-alert-icon {
+        width: 2.75rem;
+        height: 2.75rem;
+        border-radius: 0.9rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1.05rem;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+    }
+
+    .invoice-page-alert-content {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        min-width: 0;
+    }
+
+    .invoice-page-alert-title {
+        font-weight: 800;
+        font-size: 0.98rem;
+        line-height: 1.35;
+    }
+
+    .invoice-page-alert-text {
+        font-size: 0.88rem;
+        line-height: 1.65;
+        opacity: 0.9;
+    }
+
+    .invoice-page-alert-success {
+        color: #166534;
+        background: linear-gradient(135deg, rgba(236, 253, 245, 0.98) 0%, rgba(220, 252, 231, 0.95) 100%);
+        border-color: rgba(34, 197, 94, 0.18);
+    }
+
+    .invoice-page-alert-success .invoice-page-alert-icon {
+        color: #15803d;
+        background: rgba(34, 197, 94, 0.14);
+    }
+
+    .invoice-page-alert-info {
+        color: #1d4ed8;
+        background: linear-gradient(135deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.95) 100%);
+        border-color: rgba(59, 130, 246, 0.2);
+    }
+
+    .invoice-page-alert-info .invoice-page-alert-icon {
+        color: #2563eb;
+        background: rgba(59, 130, 246, 0.14);
+    }
+
+    .invoice-page-alert-warning {
+        color: #9a3412;
+        background: linear-gradient(135deg, rgba(255, 247, 237, 0.98) 0%, rgba(255, 237, 213, 0.96) 100%);
+        border-color: rgba(249, 115, 22, 0.2);
+    }
+
+    .invoice-page-alert-warning .invoice-page-alert-icon {
+        color: #ea580c;
+        background: rgba(249, 115, 22, 0.14);
+    }
+
+    .invoice-page-alert-danger {
+        color: #991b1b;
+        background: linear-gradient(135deg, rgba(254, 242, 242, 0.98) 0%, rgba(254, 226, 226, 0.95) 100%);
+        border-color: rgba(239, 68, 68, 0.18);
+    }
+
+    .invoice-page-alert-danger .invoice-page-alert-icon {
+        color: #dc2626;
+        background: rgba(239, 68, 68, 0.14);
+    }
+
+    body.theme-dark .invoice-page-alert,
+    body.dark-mode .invoice-page-alert {
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.28), inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    body.theme-dark .invoice-page-alert .btn-close,
+    body.dark-mode .invoice-page-alert .btn-close {
+        filter: invert(1) grayscale(1);
+    }
+
+    body.theme-dark .invoice-page-alert-success,
+    body.dark-mode .invoice-page-alert-success {
+        color: #bbf7d0;
+        background: linear-gradient(135deg, rgba(20, 83, 45, 0.88) 0%, rgba(21, 128, 61, 0.18) 100%);
+        border-color: rgba(34, 197, 94, 0.2);
+    }
+
+    body.theme-dark .invoice-page-alert-success .invoice-page-alert-icon,
+    body.dark-mode .invoice-page-alert-success .invoice-page-alert-icon {
+        color: #86efac;
+        background: rgba(34, 197, 94, 0.16);
+    }
+
+    body.theme-dark .invoice-page-alert-info,
+    body.dark-mode .invoice-page-alert-info {
+        color: #bfdbfe;
+        background: linear-gradient(135deg, rgba(30, 64, 175, 0.28) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border-color: rgba(96, 165, 250, 0.18);
+    }
+
+    body.theme-dark .invoice-page-alert-info .invoice-page-alert-icon,
+    body.dark-mode .invoice-page-alert-info .invoice-page-alert-icon {
+        color: #93c5fd;
+        background: rgba(59, 130, 246, 0.18);
+    }
+
+    body.theme-dark .invoice-page-alert-warning,
+    body.dark-mode .invoice-page-alert-warning {
+        color: #fdba74;
+        background: linear-gradient(135deg, rgba(124, 45, 18, 0.4) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border-color: rgba(251, 146, 60, 0.2);
+    }
+
+    body.theme-dark .invoice-page-alert-warning .invoice-page-alert-icon,
+    body.dark-mode .invoice-page-alert-warning .invoice-page-alert-icon {
+        color: #fb923c;
+        background: rgba(249, 115, 22, 0.18);
+    }
+
+    body.theme-dark .invoice-page-alert-danger,
+    body.dark-mode .invoice-page-alert-danger {
+        color: #fecaca;
+        background: linear-gradient(135deg, rgba(127, 29, 29, 0.42) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border-color: rgba(248, 113, 113, 0.18);
+    }
+
+    body.theme-dark .invoice-page-alert-danger .invoice-page-alert-icon,
+    body.dark-mode .invoice-page-alert-danger .invoice-page-alert-icon {
+        color: #fca5a5;
+        background: rgba(239, 68, 68, 0.18);
+    }
+
+    body.theme-dark #newInvoiceModal .modal-content,
+    body.theme-dark #editInvoiceModal .modal-content,
+    body.dark-mode #newInvoiceModal .modal-content,
+    body.dark-mode #editInvoiceModal .modal-content {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(17, 24, 39, 0.98) 100%);
+        border: 1px solid rgba(71, 85, 105, 0.55);
+        box-shadow: 0 22px 50px rgba(2, 6, 23, 0.45);
+    }
+
+    body.theme-dark #newInvoiceModal .modal-footer,
+    body.theme-dark #editInvoiceModal .modal-footer,
+    body.dark-mode #newInvoiceModal .modal-footer,
+    body.dark-mode #editInvoiceModal .modal-footer {
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.92) 0%, rgba(15, 23, 42, 0.98) 100%) !important;
+        border-top-color: rgba(71, 85, 105, 0.85) !important;
+        box-shadow: 0 -12px 28px rgba(2, 6, 23, 0.36);
+    }
+
+    body.theme-dark #newInvoiceModal .modal-footer .btn-outline-secondary,
+    body.theme-dark #editInvoiceModal .modal-footer .btn-outline-secondary,
+    body.dark-mode #newInvoiceModal .modal-footer .btn-outline-secondary,
+    body.dark-mode #editInvoiceModal .modal-footer .btn-outline-secondary {
+        background: rgba(30, 41, 59, 0.92);
+        border-color: #475569;
+        color: #e2e8f0;
+        box-shadow: 0 10px 22px rgba(2, 6, 23, 0.22);
+    }
+
+    body.theme-dark #newInvoiceModal .modal-footer .btn-outline-secondary:hover,
+    body.theme-dark #editInvoiceModal .modal-footer .btn-outline-secondary:hover,
+    body.dark-mode #newInvoiceModal .modal-footer .btn-outline-secondary:hover,
+    body.dark-mode #editInvoiceModal .modal-footer .btn-outline-secondary:hover {
+        background: #334155;
+        border-color: #64748b;
+        color: #f8fafc;
+    }
 </style>
 
 <div class="container-fluid py-4">
@@ -1975,14 +2478,65 @@ try {
         </div>
     </div>
 
-    <?php if (isset($_GET['created']) && $_GET['created'] == 1): ?>
-        <div class="alert alert-success border-0 shadow-sm rounded-4 mb-4">تم إنشاء الفواتير بنجاح.</div>
+    <?php
+    $page_alerts = [];
+    if (isset($_GET['created']) && $_GET['created'] == 1) {
+        $page_alerts[] = [
+            'type' => 'success',
+            'icon' => 'fa-file-circle-check',
+            'title' => 'تم الإنشاء بنجاح',
+            'message' => 'تم إنشاء الفواتير بنجاح.'
+        ];
+    }
+    if (isset($_GET['updated']) && $_GET['updated'] == 1) {
+        $page_alerts[] = [
+            'type' => 'success',
+            'icon' => 'fa-pen-to-square',
+            'title' => 'تم التحديث بنجاح',
+            'message' => 'تم تحديث الفاتورة بنجاح.'
+        ];
+    }
+    if (isset($_GET['reset']) && $_GET['reset'] == 1) {
+        $page_alerts[] = [
+            'type' => 'info',
+            'icon' => 'fa-rotate-left',
+            'title' => 'تمت الإعادة إلى المسودة',
+            'message' => 'تمت إعادة ضبط الفاتورة بنجاح.'
+        ];
+    }
+    if ($success_msg) {
+        $page_alerts[] = [
+            'type' => 'success',
+            'icon' => 'fa-circle-check',
+            'title' => 'تم تنفيذ العملية',
+            'message' => $success_msg
+        ];
+    }
+    if ($error_msg) {
+        $page_alerts[] = [
+            'type' => 'danger',
+            'icon' => 'fa-circle-xmark',
+            'title' => 'تعذر تنفيذ العملية',
+            'message' => $error_msg
+        ];
+    }
+    ?>
+    <?php if (!empty($page_alerts)): ?>
+        <div class="invoice-alert-stack mb-4">
+            <?php foreach ($page_alerts as $alert): ?>
+                <div class="invoice-page-alert invoice-page-alert-<?php echo htmlspecialchars($alert['type']); ?> alert alert-dismissible fade show rounded-4 border-0 shadow-sm" role="alert">
+                    <div class="invoice-page-alert-icon">
+                        <i class="fas <?php echo htmlspecialchars($alert['icon']); ?>"></i>
+                    </div>
+                    <div class="invoice-page-alert-content">
+                        <div class="invoice-page-alert-title"><?php echo htmlspecialchars($alert['title']); ?></div>
+                        <div class="invoice-page-alert-text"><?php echo $alert['message']; ?></div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endforeach; ?>
+        </div>
     <?php endif; ?>
-    <?php if (isset($_GET['updated']) && $_GET['updated'] == 1): ?>
-        <div class="alert alert-success border-0 shadow-sm rounded-4 mb-4">تم تحديث الفاتورة بنجاح.</div>
-    <?php endif; ?>
-    <?php if ($success_msg): ?><div class="alert alert-success border-0 shadow-sm rounded-4 mb-4"><?php echo $success_msg; ?></div><?php endif; ?>
-    <?php if ($error_msg): ?><div class="alert alert-danger border-0 shadow-sm rounded-4 mb-4"><?php echo $error_msg; ?></div><?php endif; ?>
 
     <!-- الجدول -->
     <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
@@ -2012,13 +2566,10 @@ try {
                                 <span class="fw-bold text-primary"><?php echo preg_replace('/^[A-Z-]+/', '', $display_number); ?></span>
                                 <div class="extra-small text-muted mt-1"><?php echo $inv['branch_name']; ?></div>
                             </td>
-                            <td><small><?php echo date('Y/m/d', strtotime($inv['invoice_date'])); ?></small></td>
+                            <td><small><?php echo h(format_datetime_display($inv['invoice_date'])); ?></small></td>
                             <td>
                                 <?php
-                                    $service_name = $inv['source_type'] ?: 'خدمة عامة';
-                                    if ($service_name === 'passport_transaction') {
-                                        $service_name = 'معاملة جوازات';
-                                    }
+                                    $service_name = normalize_service_display_name($inv['source_type'] ?? '');
                                 ?>
                                 <span class="badge-apple bg-primary-subtle text-primary"><?php echo htmlspecialchars($service_name); ?></span>
                             </td>
@@ -2157,18 +2708,40 @@ try {
                                                     <h6 class="dropdown-header small fw-bold">ترحيل محاسبياً (Post)</h6>
                                                 </li>
                                                 <?php if ($inv['sales_status'] != 'posted' && $inv['purchase_id'] && $inv['purchase_status'] != 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?post_all=<?php echo $main_id; ?>" onclick="return confirm('ترحيل البيع والشراء معاً؟')"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد الترحيل المالي" data-confirm-text="هل تريد ترحيل فواتير البيع والشراء معاً؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="post_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $main_id; ?>">
+                                                            <input type="hidden" name="post_scope" value="all">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-check-double me-2 text-success"></i>ترحيل الكل</button>
+                                                        </form>
+                                                    </li>
                                                     <li>
                                                         <hr class="dropdown-divider">
                                                     </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['sales_status'] != 'posted' && !$is_purchase_only): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $inv['sales_id']; ?>" onclick="return confirm('ترحيل فاتورة البيع؟')"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة البيع" data-confirm-text="هل تريد ترحيل فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="post_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['sales_id']; ?>">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice-dollar me-2 text-primary"></i>ترحيل البيع</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['purchase_id'] && $inv['purchase_status'] != 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?post_invoice=<?php echo $inv['purchase_id']; ?>" onclick="return confirm('ترحيل فاتورة الشراء؟')"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد ترحيل فاتورة الشراء" data-confirm-text="هل تريد ترحيل فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، رحّل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="post_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['purchase_id']; ?>">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-file-invoice me-2 text-warning"></i>ترحيل الشراء</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
                                             </ul>
                                         </div>
@@ -2185,18 +2758,43 @@ try {
                                                     <h6 class="dropdown-header small fw-bold">حذف الفاتورة (Delete)</h6>
                                                 </li>
                                                 <?php if ($inv['sales_status'] != 'posted' && $inv['purchase_id'] && $inv['purchase_status'] != 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small text-danger" href="invoices.php?delete_invoice=<?php echo $inv['sales_id']; ?>&delete_both=<?php echo $inv['purchase_id']; ?>" onclick="return confirm('حذف البيع والشراء معاً؟')"><i class="fas fa-trash-alt me-2"></i>حذف الكل</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف الفواتير" data-confirm-text="سيتم حذف فواتير البيع والشراء معاً وكل ما يرتبط بها. هل تريد المتابعة؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['sales_id']; ?>">
+                                                            <input type="hidden" name="delete_scope" value="both">
+                                                            <input type="hidden" name="linked_id" value="<?php echo $inv['purchase_id']; ?>">
+                                                            <button type="submit" class="dropdown-item py-2 small text-danger"><i class="fas fa-trash-alt me-2"></i>حذف الكل</button>
+                                                        </form>
+                                                    </li>
                                                     <li>
                                                         <hr class="dropdown-divider">
                                                     </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['sales_status'] != 'posted' && !$is_purchase_only): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $inv['sales_id']; ?>&confirm_linked=1" onclick="return confirm('حذف فاتورة البيع؟')"><i class="fas fa-trash me-2"></i>حذف البيع</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة البيع" data-confirm-text="هل تريد حذف فاتورة البيع؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['sales_id']; ?>">
+                                                            <input type="hidden" name="delete_scope" value="self">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2"></i>حذف البيع</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['purchase_id'] && $inv['purchase_status'] != 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?delete_invoice=<?php echo $inv['purchase_id']; ?>&confirm_linked=1" onclick="return confirm('حذف فاتورة الشراء؟')"><i class="fas fa-trash me-2 text-warning"></i>حذف الشراء</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد حذف فاتورة الشراء" data-confirm-text="هل تريد حذف فاتورة الشراء؟" data-confirm-icon="warning" data-confirm-button="نعم، احذف" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="delete_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['purchase_id']; ?>">
+                                                            <input type="hidden" name="delete_scope" value="self">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-trash me-2 text-warning"></i>حذف الشراء</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
                                             </ul>
                                         </div>
@@ -2213,18 +2811,43 @@ try {
                                                     <h6 class="dropdown-header small fw-bold">إعادة التعيين إلى مسودة (Reset)</h6>
                                                 </li>
                                                 <?php if ($inv['sales_status'] == 'posted' && $inv['purchase_id'] && $inv['purchase_status'] == 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $inv['sales_id']; ?>&reset_type=all" onclick="return confirm('إلغاء ترحيل البيع والشراء معاً؟')"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء الترحيل" data-confirm-text="سيتم إرجاع فواتير البيع والشراء إلى مسودة. هل تريد المتابعة؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['sales_id']; ?>">
+                                                            <input type="hidden" name="reset_type" value="all">
+                                                            <input type="hidden" name="linked_invoice_id" value="<?php echo $inv['purchase_id']; ?>">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-sync me-2 text-danger"></i>إلغاء ترحيل الكل</button>
+                                                        </form>
+                                                    </li>
                                                     <li>
                                                         <hr class="dropdown-divider">
                                                     </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['sales_status'] == 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $inv['sales_id']; ?>&reset_type=sales" onclick="return confirm('إلغاء ترحيل فاتورة البيع؟')"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل البيع" data-confirm-text="سيتم إرجاع فاتورة البيع إلى مسودة. هل تريد المتابعة؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['sales_id']; ?>">
+                                                            <input type="hidden" name="reset_type" value="sales">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-undo me-2 text-warning"></i>إلغاء ترحيل البيع</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
 
                                                 <?php if ($inv['purchase_id'] && $inv['purchase_status'] == 'posted'): ?>
-                                                    <li><a class="dropdown-item py-2 small" href="invoices.php?reset_invoice=<?php echo $inv['purchase_id']; ?>&reset_type=purchase" onclick="return confirm('إلغاء ترحيل فاتورة الشراء؟')"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</a></li>
+                                                    <li>
+                                                        <form method="post" class="mb-0 js-confirm-submit" data-confirm-title="تأكيد إلغاء ترحيل الشراء" data-confirm-text="سيتم إرجاع فاتورة الشراء إلى مسودة. هل تريد المتابعة؟" data-confirm-icon="warning" data-confirm-button="نعم، ألغِ الترحيل" data-cancel-button="تراجع">
+                                                            <?php echo csrf_input(); ?>
+                                                            <input type="hidden" name="invoice_action" value="reset_invoice">
+                                                            <input type="hidden" name="invoice_id" value="<?php echo $inv['purchase_id']; ?>">
+                                                            <input type="hidden" name="reset_type" value="purchase">
+                                                            <button type="submit" class="dropdown-item py-2 small"><i class="fas fa-history me-2 text-secondary"></i>إلغاء ترحيل الشراء</button>
+                                                        </form>
+                                                    </li>
                                                 <?php endif; ?>
                                             </ul>
                                         </div>
@@ -2254,7 +2877,7 @@ try {
                 <input type="hidden" name="agent_id" id="edit_agent_id">
                 <div class="modal-body p-4">
                     <div class="row g-3 mb-3">
-                        <div class="col-md-3"><label class="form-label small fw-bold text-muted">تاريخ الفاتورة</label><input type="date" name="invoice_date" id="edit_invoice_date" class="form-control" required></div>
+                        <div class="col-md-3"><label class="form-label small fw-bold text-muted">تاريخ الفاتورة</label><input type="datetime-local" name="invoice_date" id="edit_invoice_date" class="form-control" required></div>
                         <div class="col-md-3"><label class="form-label small fw-bold text-muted">الفرع المسؤول</label><select name="branch_id" id="edit_branch_id" class="form-select" required><?php foreach ($branches as $b): ?><option value="<?php echo $b['id']; ?>"><?php echo $b['branch_name']; ?></option><?php endforeach; ?></select></div>
                         <div class="col-md-3"><label class="form-label small fw-bold text-muted">نوع الخدمة</label><select name="source_type" id="edit_service_id_select" class="form-select select2-modal-edit">
                                 <option value="general">عام (General)</option><?php foreach ($services as $s): ?><option value="<?php echo $s['service_name']; ?>" data-id="<?php echo $s['id']; ?>"><?php echo $s['service_name']; ?></option><?php endforeach; ?>
@@ -2327,8 +2950,9 @@ try {
                             <input type="number" step="0.01" name="total_amount" id="edit_total_amount" class="form-control fw-bold text-primary" required data-original-price="0" data-service-currency-id="">
                             <div id="edit_sales_exchange_info" class="extra-small text-muted mt-1" style="display: none;"></div>
                         </div>
+                        <div class="col-md-2" id="edit_received_amount_field" style="display: none;"><label class="form-label small fw-bold text-muted">المبلغ الواصل</label><input type="number" step="0.01" name="amount_received" id="edit_amount_received" class="form-control"></div>
                         <div class="col-md-2"><label class="form-label small fw-bold text-danger">مبلغ الخصم</label><input type="number" step="0.01" name="discount" id="edit_discount" class="form-control" data-original-discount="0"></div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label small fw-bold text-muted">عملة البيع</label>
                             <select name="sale_currency_id" id="edit_sale_currency_id" class="form-select">
                                 <?php foreach ($currencies as $curr): ?>
@@ -2337,7 +2961,7 @@ try {
                             </select>
                         </div>
                         <div class="col-md-2"><label class="form-label small fw-bold text-warning">سعر التكلفة</label><input type="number" step="0.01" name="cost_amount" id="edit_cost_amount" class="form-control fw-bold text-warning" data-original-cost="0" data-cost-service-currency-id=""></div>
-                        <div class="col-md-3"><label class="form-label small fw-bold text-muted">عملة التكلفة</label><select name="currency_id" id="edit_main_currency_id" class="form-select"><?php foreach ($currencies as $curr): ?><option value="<?php echo $curr['id']; ?>" data-symbol="<?php echo $curr['currency_symbol']; ?>" data-buy="<?php echo $curr['exchange_rate_buy'] ?? 1; ?>" data-sell="<?php echo $curr['exchange_rate_sell'] ?? 1; ?>" data-rate="<?php echo $curr['exchange_rate'] ?? 1; ?>"><?php echo $curr['currency_name']; ?></option><?php endforeach; ?></select></div>
+                        <div class="col-md-2"><label class="form-label small fw-bold text-muted">عملة التكلفة</label><select name="currency_id" id="edit_main_currency_id" class="form-select"><?php foreach ($currencies as $curr): ?><option value="<?php echo $curr['id']; ?>" data-symbol="<?php echo $curr['currency_symbol']; ?>" data-buy="<?php echo $curr['exchange_rate_buy'] ?? 1; ?>" data-sell="<?php echo $curr['exchange_rate_sell'] ?? 1; ?>" data-rate="<?php echo $curr['exchange_rate'] ?? 1; ?>"><?php echo $curr['currency_name']; ?></option><?php endforeach; ?></select></div>
                     </div>
                     <div class="row g-3 mb-3" id="edit_exchange_rate_container" style="display: none;">
                         <div class="col-md-8">
@@ -2369,14 +2993,11 @@ try {
                             <input type="text" id="edit_service_profit_account" class="form-control bg-white" readonly value="" placeholder="لا تختار نوع الخدمة أولاً">
                         </div>
                     </div>
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-6" id="edit_received_amount_field" style="display: none;"><label class="form-label small fw-bold text-muted">المبلغ الواصل</label><input type="number" step="0.01" name="amount_received" id="edit_amount_received" class="form-control"></div>
-                    </div>
                     <div class="row g-3">
                         <div class="col-12"><label class="form-label small fw-bold text-muted">البيان / الوصف</label><textarea name="description" id="edit_description" class="form-control" rows="2"></textarea></div>
                     </div>
                 </div>
-                <div class="modal-footer edit-modal-footer border-top-0 p-4 rounded-bottom-4">
+                <div class="modal-footer edit-modal-footer invoice-modal-footer border-top-0 p-4 rounded-bottom-4">
                     <button type="button" class="btn btn-outline-secondary px-4 py-2" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="update_invoice" class="btn btn-info text-white px-5 py-2 shadow fw-bold">تحديث الفاتورة</button>
                 </div>
@@ -2402,7 +3023,7 @@ try {
                     <div class="row g-3 mb-4">
                         <div class="col-md-3">
                             <label class="form-label small fw-bold text-muted">تاريخ الفاتورة</label>
-                            <input type="date" name="invoice_date" class="form-control apple-input" value="<?php echo date('Y-m-d'); ?>" required>
+                            <input type="datetime-local" name="invoice_date" class="form-control apple-input" value="<?php echo h(format_datetime_local_value(normalize_datetime_db(null))); ?>" required>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label small fw-bold text-muted">الفرع المسؤول</label>
@@ -2497,11 +3118,18 @@ try {
                             <input type="number" step="0.01" name="total_amount" id="total_amount" class="form-control fw-bold text-primary" required data-original-price="0" data-service-currency-id="">
                             <div id="sales_exchange_info" class="extra-small text-muted mt-1" style="display: none;"></div>
                         </div>
+                        <div class="col-md-2" id="received_amount_field" style="display: none;">
+                            <label class="form-label small fw-bold text-muted">المبلغ الواصل (المقبوض)</label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light text-primary"><i class="fas fa-hand-holding-usd"></i></span>
+                                <input type="number" step="0.01" name="received_amount" id="received_amount" class="form-control fw-bold border-primary text-primary" placeholder="0.00">
+                            </div>
+                        </div>
                         <div class="col-md-2">
                             <label class="form-label small fw-bold text-danger">مبلغ الخصم</label>
                             <input type="number" step="0.01" name="discount" id="discount" class="form-control" data-original-discount="0">
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label small fw-bold text-muted">عملة البيع</label>
                             <select name="sale_currency_id" id="sale_currency_id" class="form-select">
                                 <?php foreach ($currencies as $curr): ?>
@@ -2513,7 +3141,7 @@ try {
                             <label class="form-label small fw-bold text-warning">سعر التكلفة</label>
                             <input type="number" step="0.01" name="cost_amount" id="cost_amount" class="form-control fw-bold text-warning" data-original-cost="0" data-cost-service-currency-id="">
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label small fw-bold text-muted" id="main_currency_label">عملة التكلفة</label>
                             <select name="currency_id" id="main_currency_id" class="form-select">
                                 <?php foreach ($currencies as $curr): ?>
@@ -2545,17 +3173,6 @@ try {
                         </div>
                     </div>
 
-                    <!-- الواصل ومديونية المورد -->
-                    <div class="row g-3 mb-4">
-                        <div class="col-md-6" id="received_amount_field" style="display: none;">
-                            <label class="form-label small fw-bold text-muted">المبلغ الواصل (المقبوض)</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-light text-primary"><i class="fas fa-hand-holding-usd"></i></span>
-                                <input type="number" step="0.01" name="received_amount" id="received_amount" class="form-control fw-bold border-primary text-primary" placeholder="0.00">
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- حسابات الخدمة -->
                     <div class="row g-3 mb-4 p-3 bg-light rounded-4 border border-dashed">
                         <div class="col-12 mb-3">
@@ -2582,7 +3199,7 @@ try {
                         </div>
                     </div>
                 </div>
-                <div class="modal-footer border-top-0 p-3 bg-light rounded-bottom-4">
+                <div class="modal-footer invoice-modal-footer border-top-0 p-3 bg-light rounded-bottom-4">
                     <button type="button" class="btn btn-outline-secondary px-4 py-2" data-bs-dismiss="modal">إلغاء</button>
                     <button type="submit" name="add_invoice" class="btn btn-primary px-8 py-4 shadow-lg fw-bold fs-4">
                         <i class="fas fa-check-circle me-3 fa-lg"></i> حفظ الفاتورة والترحيل للمسودة
@@ -2595,6 +3212,69 @@ try {
 
 <script>
     $(document).ready(function() {
+        async function showPageDialog({ title, text, icon = 'info', confirmText = 'حسناً', cancelText = 'إلغاء', showCancel = false }) {
+            const isDark = document.body.classList.contains('theme-dark') || document.body.classList.contains('dark-mode');
+
+            if (window.Swal && typeof window.Swal.fire === 'function') {
+                return await window.Swal.fire({
+                    title,
+                    text,
+                    icon,
+                    showCancelButton: showCancel,
+                    confirmButtonText: confirmText,
+                    cancelButtonText: cancelText,
+                    reverseButtons: true,
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a',
+                    confirmButtonColor: isDark ? '#2563eb' : undefined,
+                    cancelButtonColor: isDark ? '#475569' : undefined
+                });
+            }
+
+            if (showCancel) {
+                return { isConfirmed: window.confirm(text || title || '') };
+            }
+
+            window.alert(text || title || '');
+            return { isConfirmed: true };
+        }
+
+        async function confirmDialog({ title, text, icon, confirmText, cancelText }) {
+            const res = await showPageDialog({
+                title,
+                text,
+                icon: icon || 'question',
+                confirmText: confirmText || 'تأكيد',
+                cancelText: cancelText || 'إلغاء',
+                showCancel: true
+            });
+            return !!res.isConfirmed;
+        }
+
+        $(document).on('submit', 'form.js-confirm-submit', async function(e) {
+            if (this.dataset.confirmed === '1') {
+                this.dataset.confirmed = '0';
+                return true;
+            }
+
+            e.preventDefault();
+
+            const ok = await confirmDialog({
+                title: this.dataset.confirmTitle || 'تأكيد العملية',
+                text: this.dataset.confirmText || 'هل تريد المتابعة؟',
+                icon: this.dataset.confirmIcon || 'warning',
+                confirmText: this.dataset.confirmButton || 'نعم',
+                cancelText: this.dataset.cancelButton || 'إلغاء'
+            });
+
+            if (ok) {
+                this.dataset.confirmed = '1';
+                this.requestSubmit ? this.requestSubmit() : this.submit();
+            }
+
+            return false;
+        });
+
         $('.select2-modal').select2({
             dropdownParent: $('#newInvoiceModal'),
             width: '100%'
@@ -2613,41 +3293,72 @@ try {
         const serviceConfigs = <?php echo json_encode($service_configs); ?>;
 
         // Function to update service account display
-        function updateServiceAccounts(serviceName, prefix = '') {
-            const config = serviceConfigs[serviceName];
-            if (!config) {
-                $('#' + prefix + 'service_revenue_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
-                $('#' + prefix + 'service_cost_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
-                $('#' + prefix + 'service_profit_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
+        function updateServiceAccounts(serviceName, prefix = '', serviceId = null) {
+            const setAccountFields = function(config) {
+                if (!config) {
+                    $('#' + prefix + 'service_revenue_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
+                    $('#' + prefix + 'service_cost_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
+                    $('#' + prefix + 'service_profit_account').val('').attr('placeholder', 'لا تختار نوع الخدمة أولاً');
+                    return;
+                }
+
+                $('#' + prefix + 'service_revenue_account').val(config.revenue_account_name || 'لم يتم إعداد الحساب');
+                $('#' + prefix + 'service_cost_account').val(config.cost_account_name || 'لم يتم إعداد الحساب');
+                $('#' + prefix + 'service_profit_account').val(config.profit_account_name || 'لم يتم إعداد الحساب');
+            };
+
+            if (!serviceName || serviceName === 'general') {
+                setAccountFields(null);
                 return;
             }
-            
-            $('#' + prefix + 'service_revenue_account').val(config.revenue_account_name || 'لم يتم إعداد الحساب');
-            $('#' + prefix + 'service_cost_account').val(config.cost_account_name || 'لم يتم إعداد الحساب');
-            $('#' + prefix + 'service_profit_account').val(config.profit_account_name || 'لم يتم إعداد الحساب');
+
+            const fallbackConfig = serviceConfigs[serviceName] || null;
+            const resolvedServiceId = serviceId || ($('#' + prefix + 'service_id_select').find(':selected').data('id')) || ($('#' + prefix + 'service_id').find(':selected').data('id'));
+
+            if (!resolvedServiceId) {
+                setAccountFields(fallbackConfig);
+                return;
+            }
+
+            $.ajax({
+                url: 'ajax_get_service_accounts.php',
+                data: { service_id: resolvedServiceId },
+                dataType: 'json',
+                success: function(res) {
+                    if (res && res.success) {
+                        setAccountFields(res);
+                    } else {
+                        setAccountFields(fallbackConfig);
+                    }
+                },
+                error: function() {
+                    setAccountFields(fallbackConfig);
+                }
+            });
         }
 
         // Event listener for service type change
         $('#service_id').change(function() {
             const serviceName = $(this).val();
-            updateServiceAccounts(serviceName);
+            const serviceId = $(this).find(':selected').data('id') || null;
+            updateServiceAccounts(serviceName, '', serviceId);
         });
 
         // Initialize service accounts for edit modal as well
         $('#edit_service_id_select').change(function() {
             const serviceName = $(this).val();
-            updateServiceAccounts(serviceName, 'edit_');
+            const serviceId = $(this).find(':selected').data('id') || null;
+            updateServiceAccounts(serviceName, 'edit_', serviceId);
         });
 
         // Function to update a currency dropdown with active currencies for an account
         function updateCurrencyDropdown(currencySelectId, accountId, prefix = '') {
             if (!accountId) {
                 // If no account selected, show all currencies
-                $.get('invoices.php', { 
-                    action: 'get_active_currencies', 
-                    account_id: 'all' 
-                }, function(response) {
-                    const currencies = JSON.parse(response);
+                $.get('invoices.php', {
+                    action: 'get_active_currencies',
+                    account_id: 'all'
+                }, function(currencies) {
                     const select = $('#' + currencySelectId);
                     const currentValue = select.val();
                     select.empty();
@@ -2663,7 +3374,7 @@ try {
                         }).text(curr.currency_name));
                     });
                     updateLogic(prefix);
-                });
+                }, 'json');
                 return;
             }
 
@@ -2678,11 +3389,10 @@ try {
                 
                 // If no active currencies found, show all currencies as fallback
                 if (!currencies || currencies.length === 0) {
-                    $.get('invoices.php', { 
-                        action: 'get_active_currencies', 
-                        account_id: 'all' 
-                    }, function(response) {
-                        const allCurrencies = JSON.parse(response);
+                    $.get('invoices.php', {
+                        action: 'get_active_currencies',
+                        account_id: 'all'
+                    }, function(allCurrencies) {
                         allCurrencies.forEach(curr => {
                             const isSelected = curr.is_default ? 'selected' : '';
                             select.append($('<option>', {
@@ -2695,7 +3405,7 @@ try {
                             }).text(curr.currency_name));
                         });
                         updateLogic(prefix);
-                    });
+                    }, 'json');
                     return;
                 }
 
@@ -2875,7 +3585,11 @@ try {
             const val = $('#' + prefix + 'record_purchase').val();
             if (val === null || val === '') {
                 e.preventDefault();
-                alert('يرجى اختيار ما إذا كنت تريد تسجيل مديونية للمورد أم لا.');
+                showPageDialog({
+                    title: 'بيانات ناقصة',
+                    text: 'يرجى اختيار ما إذا كنت تريد تسجيل مديونية للمورد أم لا.',
+                    icon: 'warning'
+                });
                 $('#' + prefix + 'record_purchase').focus();
                 return false;
             }
@@ -2883,7 +3597,11 @@ try {
             // 2. تحقق من الخصم
             if (!validateDiscount(prefix)) {
                 e.preventDefault();
-                alert('عفواً! لا يمكن حفظ الفاتورة لأن السعر بعد الخصم أقل من سعر التكلفة.');
+                showPageDialog({
+                    title: 'تحذير مالي',
+                    text: 'عفواً! لا يمكن حفظ الفاتورة لأن السعر بعد الخصم أقل من سعر التكلفة.',
+                    icon: 'warning'
+                });
                 $('#' + prefix + 'discount').focus();
                 return false;
             }
@@ -2894,7 +3612,11 @@ try {
                 const branchId = $('#' + prefix + 'branch_id').val();
                 if (!branchId || branchId === '') {
                     e.preventDefault();
-                    alert('عفواً! اختيار الفرع (مركز التكلفة) إلزامي حسب إعدادات النظام.');
+                    showPageDialog({
+                        title: 'مركز التكلفة مطلوب',
+                        text: 'عفواً! اختيار الفرع (مركز التكلفة) إلزامي حسب إعدادات النظام.',
+                        icon: 'warning'
+                    });
                     $('#' + prefix + 'branch_id').focus();
                     return false;
                 }
@@ -2960,7 +3682,11 @@ try {
         $(document).on('click', '.select2-container--disabled', function() {
             const id = $(this).prev('select').attr('id');
             if (id === 'account_select' || id === 'edit_account_select') {
-                alert('يرجى اختيار "نوع التوصيل" أولاً لتتمكن من اختيار الحساب.');
+                showPageDialog({
+                    title: 'تنبيه',
+                    text: 'يرجى اختيار "نوع التوصيل" أولاً لتتمكن من اختيار الحساب.',
+                    icon: 'info'
+                });
                 const prefix = id.startsWith('edit') ? 'edit_' : '';
                 $('#' + prefix + 'delivery_type').focus();
             }
@@ -3232,14 +3958,15 @@ try {
 
         window.loadInvoiceData = function(inv) {
             $('#edit_invoice_id').val(inv.sales_id || inv.purchase_id);
-            $('#edit_invoice_date').val(inv.invoice_date);
+            $('#edit_invoice_date').val((inv.invoice_date || '').replace(' ', 'T').slice(0, 16));
 
             // ضبط العملات
             $('#edit_sale_currency_id').val(inv.currency_id).trigger('change.select2');
             $('#edit_main_currency_id').val(inv.purchase_currency_id || inv.currency_id).trigger('change.select2');
 
             $('#edit_service_id_select').val(inv.source_type || 'general').trigger('change.select2');
-            updateServiceAccounts(inv.source_type || 'general', 'edit_'); // Call to update service accounts display!
+            const editServiceId = $('#edit_service_id_select').find(':selected').data('id') || null;
+            updateServiceAccounts(inv.source_type || 'general', 'edit_', editServiceId); // Call to update service accounts display!
             $('#edit_branch_id').val(inv.branch_id || 1);
             $('#edit_total_amount').val(inv.sales_amount || 0);
             $('#edit_discount').val(inv.sales_discount || '');

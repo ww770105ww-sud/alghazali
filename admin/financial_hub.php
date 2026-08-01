@@ -26,7 +26,67 @@ try {
         AND status = 'posted'
     ")->fetchColumn() ?: 0;
 
-    // Recent activities (Last 8 activities for more detail)
+    // Current month sales
+    $current_month_sales = $pdo->query("
+        SELECT SUM(net_amount)
+        FROM invoices
+        WHERE invoice_category = 'sales'
+        AND invoice_status = 'posted'
+        AND MONTH(invoice_date) = MONTH(CURRENT_DATE())
+        AND YEAR(invoice_date) = YEAR(CURRENT_DATE())
+    ")->fetchColumn() ?: 0;
+
+    // Current month purchases
+    $current_month_purchases = $pdo->query("
+        SELECT SUM(net_amount)
+        FROM invoices
+        WHERE invoice_category = 'purchase'
+        AND invoice_status = 'posted'
+        AND MONTH(invoice_date) = MONTH(CURRENT_DATE())
+        AND YEAR(invoice_date) = YEAR(CURRENT_DATE())
+    ")->fetchColumn() ?: 0;
+
+    // Unpaid invoices (receivables)
+    $unpaid_invoices = $pdo->query("
+        SELECT COUNT(*)
+        FROM invoices
+        WHERE invoice_status = 'posted'
+        AND payment_status != 'fully_paid'
+    ")->fetchColumn();
+    $unpaid_invoices_amount = $pdo->query("
+        SELECT SUM(net_amount - amount_received)
+        FROM invoices
+        WHERE invoice_status = 'posted'
+        AND payment_status != 'fully_paid'
+    ")->fetchColumn() ?: 0;
+
+    // Total customers
+    $total_customers = $pdo->query("SELECT COUNT(*) FROM customers")->fetchColumn();
+
+    // Total suppliers
+    $total_suppliers = $pdo->query("SELECT COUNT(*) FROM suppliers")->fetchColumn();
+
+    // Current month receipts
+    $current_month_receipts = $pdo->query("
+        SELECT SUM(amount)
+        FROM financial_transactions
+        WHERE transaction_type = 'receipt'
+        AND status = 'posted'
+        AND MONTH(transaction_date) = MONTH(CURRENT_DATE())
+        AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+    ")->fetchColumn() ?: 0;
+
+    // Current month payments (all)
+    $current_month_all_payments = $pdo->query("
+        SELECT SUM(amount)
+        FROM financial_transactions
+        WHERE transaction_type = 'payment'
+        AND status = 'posted'
+        AND MONTH(transaction_date) = MONTH(CURRENT_DATE())
+        AND YEAR(transaction_date) = YEAR(CURRENT_DATE())
+    ")->fetchColumn() ?: 0;
+
+    // Recent activities (Last 12 activities for more detail)
     $recent_activities = $pdo->query("
         (SELECT
             i.id, i.invoice_number as doc_number, i.invoice_date as doc_date, i.currency_id, i.net_amount as amount,
@@ -65,7 +125,7 @@ try {
             c.currency_symbol
         FROM financial_transactions t
         JOIN currencies c ON t.currency_id = c.id)
-        ORDER BY created_at DESC LIMIT 8
+        ORDER BY created_at DESC LIMIT 12
     ")->fetchAll();
 
     // Balances summary by currency
@@ -77,6 +137,7 @@ try {
     ")->fetchAll();
 } catch (PDOException $e) {
     // If we're here, some tables might be missing
+    $error_message = $e->getMessage();
     $total_invoices = 0;
     $total_invoices_amount = 0;
     $total_payments = 0;
@@ -85,6 +146,14 @@ try {
     $draft_documents = 0;
     $unapproved_journal = 0;
     $current_month_expenses = 0;
+    $current_month_sales = 0;
+    $current_month_purchases = 0;
+    $unpaid_invoices = 0;
+    $unpaid_invoices_amount = 0;
+    $total_customers = 0;
+    $total_suppliers = 0;
+    $current_month_receipts = 0;
+    $current_month_all_payments = 0;
     $recent_activities = [];
     $currency_balances = [];
     $migration_needed = true;
@@ -211,6 +280,23 @@ try {
     .icon-purple {
         background: var(--apple-purple);
         color: white;
+    }
+
+    .icon-teal {
+        background: var(--apple-teal);
+        color: white;
+    }
+
+    .text-teal {
+        color: var(--apple-teal);
+    }
+
+    .text-purple {
+        color: var(--apple-purple);
+    }
+
+    .text-orange {
+        color: var(--apple-orange);
     }
 
     .stat-value {
@@ -377,6 +463,26 @@ try {
         color: #f87171 !important;
     }
 
+    body.theme-dark .stat-value.text-success {
+        color: #4ade80 !important;
+    }
+
+    body.theme-dark .stat-value.text-teal {
+        color: #22d3ee !important;
+    }
+
+    body.theme-dark .stat-value.text-purple {
+        color: #a78bfa !important;
+    }
+
+    body.theme-dark .stat-value.text-orange {
+        color: #fb923c !important;
+    }
+
+    body.theme-dark .stat-value.text-blue {
+        color: #60a5fa !important;
+    }
+
     body.theme-dark .recent-activity-item {
         background: rgba(255, 255, 255, 0.02) !important;
         border-bottom-color: rgba(255, 255, 255, 0.05) !important;
@@ -418,8 +524,11 @@ try {
             <div>
                 <h5 class="fw-bold text-warning mb-1"><i class="fas fa-exclamation-triangle me-2"></i> النظام المالي غير مكتمل</h5>
                 <p class="mb-0 text-muted">يرجى تفعيل الجداول الجديدة لضمان عمل كافة المميزات.</p>
+                <?php if (isset($error_message)): ?>
+                    <p class="mb-0 text-danger small mt-1"><strong>خطأ:</strong> <?php echo htmlspecialchars($error_message); ?></p>
+                <?php endif; ?>
             </div>
-            <a href="../run_migration.php" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm">تفعيل الآن</a>
+            <a href="tools/run_migration.php" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm">تفعيل الآن</a>
         </div>
     <?php endif; ?>
 
@@ -441,8 +550,8 @@ try {
         </div>
     </div>
 
-    <!-- Quick Stats Row -->
-    <div class="row g-4 mb-5 fade-in delay-1">
+    <!-- Quick Stats Row 1 -->
+    <div class="row g-4 mb-4 fade-in delay-1">
         <div class="col-md-3">
             <div class="apple-card stat-pill">
                 <div class="stat-header">
@@ -488,6 +597,110 @@ try {
                 <div>
                     <div class="stat-value"><?php echo $pending_posting; ?></div>
                     <div class="stat-label">عمليات معلقة</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stats Row 2 -->
+    <div class="row g-4 mb-5 fade-in delay-2">
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-green"><i class="fas fa-chart-line"></i></div>
+                    <div class="small text-success fw-bold">هذا الشهر</div>
+                </div>
+                <div>
+                    <div class="stat-value text-success"><?php echo number_format($current_month_sales, 2); ?></div>
+                    <div class="stat-label">مبيعات الشهر</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-orange"><i class="fas fa-shopping-cart"></i></div>
+                    <div class="small text-orange fw-bold">هذا الشهر</div>
+                </div>
+                <div>
+                    <div class="stat-value text-orange"><?php echo number_format($current_month_purchases, 2); ?></div>
+                    <div class="stat-label">مشتريات الشهر</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-purple"><i class="fas fa-hand-holding-usd"></i></div>
+                    <div class="small text-purple fw-bold"><?php echo $unpaid_invoices; ?> فاتورة</div>
+                </div>
+                <div>
+                    <div class="stat-value text-purple"><?php echo number_format($unpaid_invoices_amount, 2); ?></div>
+                    <div class="stat-label">المستحقات</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-teal"><i class="fas fa-users"></i></div>
+                    <div class="small text-teal fw-bold"><?php echo $total_customers; ?> عميل</div>
+                </div>
+                <div>
+                    <div class="stat-value text-teal"><?php echo $total_suppliers; ?></div>
+                    <div class="stat-label">عدد الموردين</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stats Row 3 -->
+    <div class="row g-4 mb-5 fade-in delay-3">
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-green"><i class="fas fa-hand-holding-dollar"></i></div>
+                    <div class="small text-success fw-bold">هذا الشهر</div>
+                </div>
+                <div>
+                    <div class="stat-value text-success"><?php echo number_format($current_month_receipts, 2); ?></div>
+                    <div class="stat-label">القبوض الشهرية</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-red"><i class="fas fa-money-bill-wave"></i></div>
+                    <div class="small text-danger fw-bold">هذا الشهر</div>
+                </div>
+                <div>
+                    <div class="stat-value text-danger"><?php echo number_format($current_month_all_payments, 2); ?></div>
+                    <div class="stat-label">الصرفات الشهرية</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-blue"><i class="fas fa-user"></i></div>
+                    <div class="small text-blue fw-bold"><?php echo $total_customers; ?> عميل</div>
+                </div>
+                <div>
+                    <div class="stat-value text-blue"><?php echo $total_customers; ?></div>
+                    <div class="stat-label">عدد العملاء</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="apple-card stat-pill">
+                <div class="stat-header">
+                    <div class="stat-icon icon-orange"><i class="fas fa-file-alt"></i></div>
+                    <div class="small text-warning fw-bold"><?php echo $draft_documents; ?> مستند</div>
+                </div>
+                <div>
+                    <div class="stat-value"><?php echo $draft_documents; ?></div>
+                    <div class="stat-label">مستندات مسودة</div>
                 </div>
             </div>
         </div>
@@ -602,6 +815,18 @@ try {
                     <i class="fas fa-chart-bar text-primary"></i>
                     <span>ملخص الأرباح والتكاليف والإيرادات</span>
                     <span class="badge rounded-pill bg-primary px-2">جديد</span>
+                </a>
+                <a href="balance_sheet.php" class="nav-item-apple">
+                    <i class="fas fa-balance-scale-right text-info"></i>
+                    <span>الميزانيات العمومية</span>
+                </a>
+                <a href="exchange_reports.php" class="nav-item-apple">
+                    <i class="fas fa-exchange-alt text-purple"></i>
+                    <span>تقارير الصرافة</span>
+                </a>
+                <a href="bus_flight_bookings_reports.php" class="nav-item-apple">
+                    <i class="fas fa-plane-departure text-orange"></i>
+                    <span>تقارير الحجوزات</span>
                 </a>
 
                 <div class="section-label">النظام المالي</div>

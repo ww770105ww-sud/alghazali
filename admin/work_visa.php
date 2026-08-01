@@ -148,6 +148,443 @@ require_once 'header.php';
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
+
+    .financial-actions-wrap {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .financial-action-btn {
+        border: 0;
+        border-radius: 999px;
+        padding: 0.38rem 0.72rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        transition: all 0.18s ease;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+    }
+
+    .financial-action-btn:hover:not(.disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px rgba(15, 23, 42, 0.14);
+    }
+
+    .financial-action-btn.fin-post {
+        background: rgba(34, 197, 94, 0.12);
+        color: #15803d;
+    }
+
+    .financial-action-btn.fin-unpost {
+        background: rgba(245, 158, 11, 0.16);
+        color: #b45309;
+    }
+
+    .financial-action-btn.disabled,
+    .financial-action-btn:disabled {
+        background: rgba(148, 163, 184, 0.18) !important;
+        color: #64748b !important;
+        box-shadow: none;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+
+    body.theme-dark .financial-action-btn.fin-post {
+        background: rgba(34, 197, 94, 0.18);
+        color: #86efac;
+    }
+
+    body.theme-dark .financial-action-btn.fin-unpost {
+        background: rgba(245, 158, 11, 0.2);
+        color: #fcd34d;
+    }
+
+    .financial-action-group {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .financial-action-menu {
+        position: absolute;
+        top: calc(100% + 0.35rem);
+        inset-inline-end: 0;
+        min-width: 210px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 1rem;
+        box-shadow: 0 16px 32px rgba(15, 23, 42, 0.16);
+        padding: 0.45rem;
+        display: none;
+        flex-direction: column;
+        gap: 0.35rem;
+        z-index: 30;
+    }
+
+    .financial-action-menu.show {
+        display: flex;
+    }
+
+    .financial-action-menu-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--text-muted);
+        padding: 0.1rem 0.35rem 0.25rem;
+    }
+
+    .financial-action-menu-item {
+        border: 0;
+        border-radius: 0.85rem;
+        padding: 0.5rem 0.7rem;
+        font-size: 0.74rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        text-align: right;
+        background: transparent;
+        color: var(--text-main);
+        width: 100%;
+        transition: all 0.16s ease;
+    }
+
+    .financial-action-menu-item:hover:not(.disabled) {
+        background: rgba(59, 130, 246, 0.08);
+    }
+
+    .financial-action-menu-item.post-option {
+        color: #15803d;
+        background: rgba(34, 197, 94, 0.08);
+    }
+
+    .financial-action-menu-item.unpost-option {
+        color: #b45309;
+        background: rgba(245, 158, 11, 0.10);
+    }
+
+    .financial-action-menu-item.manage-option {
+        color: #1d4ed8;
+        background: rgba(59, 130, 246, 0.08);
+    }
+
+    .financial-action-menu-item.delete-option {
+        color: #b91c1c;
+        background: rgba(239, 68, 68, 0.08);
+    }
+
+    .financial-action-menu-item.disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+
+    .page-toolbar-card {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+        border: 1px solid var(--card-border);
+        border-radius: 1.25rem;
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    body.theme-dark .page-toolbar-card {
+        background: linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96));
+    }
+
+    .toolbar-title {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+    }
+
+    .toolbar-title-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(34, 197, 94, 0.12);
+        color: #16a34a;
+        font-size: 1.2rem;
+        box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.16);
+    }
+
+    body.theme-dark .toolbar-title-icon {
+        background: rgba(34, 197, 94, 0.18);
+        color: #86efac;
+    }
+
+    .toolbar-subtitle {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        margin-top: 0.2rem;
+    }
+
+    .toolbar-form .form-select,
+    .toolbar-form .form-control,
+    .toolbar-form .input-group-text {
+        border: 1px solid var(--card-border) !important;
+        box-shadow: none !important;
+        background-color: var(--card-bg) !important;
+        color: var(--text-main) !important;
+    }
+
+    .toolbar-form .input-group-text {
+        color: var(--text-muted) !important;
+    }
+
+    .workvisa-table-card {
+        border: 1px solid var(--card-border);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+        box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+    }
+
+    body.theme-dark .workvisa-table-card {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
+    }
+
+    .workvisa-table-wrap {
+        padding: 0.8rem;
+    }
+
+    .workvisa-table-wrap .table {
+        direction: rtl;
+        border-collapse: separate;
+        border-spacing: 0 8px;
+        margin-bottom: 0;
+    }
+
+    .workvisa-table-wrap .table thead th {
+        border: 0 !important;
+        padding: 0.9rem 0.8rem;
+        font-size: 0.9rem;
+        font-weight: 800;
+        white-space: nowrap;
+        background: transparent !important;
+    }
+
+    .workvisa-table-wrap .table tbody td {
+        background: rgba(255, 255, 255, 0.78);
+        padding: 0.85rem 0.75rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.18) !important;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18) !important;
+        vertical-align: middle;
+    }
+
+    body.theme-dark .workvisa-table-wrap .table tbody td {
+        background: rgba(15, 23, 42, 0.9);
+        border-top-color: rgba(148, 163, 184, 0.12) !important;
+        border-bottom-color: rgba(148, 163, 184, 0.12) !important;
+    }
+
+    .workvisa-table-wrap .table tbody tr td:first-child {
+        border-inline-start: 1px solid rgba(148, 163, 184, 0.18) !important;
+        border-start-start-radius: 18px;
+        border-end-start-radius: 18px;
+    }
+
+    .workvisa-table-wrap .table tbody tr td:last-child {
+        border-inline-end: 1px solid rgba(148, 163, 184, 0.18) !important;
+        border-start-end-radius: 18px;
+        border-end-end-radius: 18px;
+    }
+
+    body.theme-dark .workvisa-table-wrap .table tbody tr td:first-child,
+    body.theme-dark .workvisa-table-wrap .table tbody tr td:last-child {
+        border-color: rgba(148, 163, 184, 0.12) !important;
+    }
+
+    .workvisa-table-wrap .table tbody tr {
+        transition: transform 0.16s ease, box-shadow 0.16s ease;
+    }
+
+    .workvisa-table-wrap .table tbody tr:hover {
+        transform: translateY(-1px);
+    }
+
+    .clamp-1,
+    .clamp-2 {
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        word-break: break-word;
+    }
+
+    .clamp-1 {
+        -webkit-line-clamp: 1;
+    }
+
+    .clamp-2 {
+        -webkit-line-clamp: 2;
+    }
+
+    .person-cell .person-name {
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text-bold);
+        line-height: 1.45;
+    }
+
+    .person-cell .person-name-en {
+        font-size: 0.78rem;
+        color: #60a5fa;
+        margin-top: 0.22rem;
+        letter-spacing: 0.02em;
+    }
+
+    .person-cell .person-meta {
+        font-size: 0.76rem;
+        color: var(--text-muted);
+        margin-top: 0.35rem;
+    }
+
+    .finance-mini-card {
+        border-radius: 18px;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(248, 250, 252, 0.86);
+        min-width: 165px;
+    }
+
+    body.theme-dark .finance-mini-card {
+        background: rgba(30, 41, 59, 0.85);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .finance-mini-card .mini-label {
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        margin-bottom: 0.18rem;
+    }
+
+    .finance-mini-card .mini-name {
+        font-size: 0.9rem;
+        font-weight: 800;
+        color: var(--text-bold);
+        line-height: 1.5;
+        margin-bottom: 0.45rem;
+    }
+
+    .finance-mini-card .mini-amount {
+        font-size: 1.02rem;
+        font-weight: 900;
+        color: #2563eb;
+    }
+
+    .status-stack,
+    .payment-stack {
+        min-width: 160px;
+    }
+
+    .status-stack .badge,
+    .payment-stack .badge {
+        font-size: 0.73rem;
+    }
+
+    .payment-box {
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(248, 250, 252, 0.78);
+        padding: 0.65rem 0.75rem;
+    }
+
+    body.theme-dark .payment-box {
+        background: rgba(30, 41, 59, 0.78);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .payment-box-title {
+        font-size: 0.75rem;
+        font-weight: 800;
+        margin-bottom: 0.4rem;
+    }
+
+    .record-date {
+        white-space: nowrap;
+        font-weight: 700;
+        color: var(--text-muted);
+    }
+
+    .payment-stack {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+    }
+
+    .attachment-profession-card {
+        min-width: 170px;
+        border-radius: 18px;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(248, 250, 252, 0.86);
+    }
+
+    body.theme-dark .attachment-profession-card {
+        background: rgba(30, 41, 59, 0.85);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .attachment-profession-card .mini-label {
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        margin-bottom: 0.25rem;
+    }
+
+    .attachment-icons-row {
+        display: flex;
+        justify-content: center;
+        gap: 0.45rem;
+        margin-bottom: 0.55rem;
+    }
+
+    .attachment-icon-chip {
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(255, 255, 255, 0.9);
+        color: #94a3b8;
+    }
+
+    body.theme-dark .attachment-icon-chip {
+        background: rgba(15, 23, 42, 0.75);
+        border-color: rgba(148, 163, 184, 0.12);
+    }
+
+    .attachment-icon-chip.is-filled {
+        color: #16a34a;
+        background: rgba(22, 163, 74, 0.12);
+        border-color: rgba(22, 163, 74, 0.22);
+    }
+
+    .profession-badge-card {
+        border-radius: 14px;
+        padding: 0.45rem 0.6rem;
+        background: rgba(59, 130, 246, 0.08);
+        border: 1px solid rgba(59, 130, 246, 0.14);
+        color: var(--text-bold);
+        font-size: 0.83rem;
+        font-weight: 800;
+        line-height: 1.5;
+        text-align: center;
+    }
+
+    body.theme-dark .profession-badge-card {
+        background: rgba(59, 130, 246, 0.12);
+        border-color: rgba(96, 165, 250, 0.18);
+    }
+
+    @media (max-width: 1200px) {
+        .payment-stack {
+            grid-template-columns: 1fr;
+        }
+    }
 </style>
 <?php
 
@@ -348,14 +785,21 @@ $where_sql = !empty($where_clauses) ? "WHERE " . implode(" AND ", $where_clauses
 $stmt = $pdo->prepare("
     SELECT p.*, pr.name_ar as profession_name, s.status_name, s.status_color as status_color,
            a.agent_name, b.branch_name, c.currency_name, c.currency_symbol,
-           inv.cost_amount as purchase_price, inv.total_amount as sale_price
+           purchase_inv.total_amount as purchase_price, sale_inv.total_amount as sale_price,
+           sale_inv.payment_status as sales_payment_status, sale_inv.invoice_status as sales_invoice_status,
+           purchase_inv.payment_status as purchase_payment_status, purchase_inv.invoice_status as purchase_invoice_status,
+           sup.supplier_name as purchase_supplier_name,
+           sale_acc.account_code as sales_account_code, sale_acc.account_name_ar as sales_account_name
     FROM passports p
     LEFT JOIN professions pr ON p.profession_id = pr.id
     LEFT JOIN statuses s ON p.status_id = s.id
     LEFT JOIN agents a ON p.agent_id = a.id
     LEFT JOIN branches b ON p.branch_id = b.id
-    LEFT JOIN invoices inv ON p.invoice_id = inv.id
-    LEFT JOIN currencies c ON inv.currency_id = c.id
+    LEFT JOIN invoices sale_inv ON p.sales_invoice_id = sale_inv.id
+    LEFT JOIN invoices purchase_inv ON p.purchase_invoice_id = purchase_inv.id
+    LEFT JOIN suppliers sup ON purchase_inv.supplier_id = sup.id
+    LEFT JOIN unified_accounts sale_acc ON sale_inv.account_id = sale_acc.id
+    LEFT JOIN currencies c ON COALESCE(sale_inv.currency_id, purchase_inv.currency_id) = c.id
     $where_sql
     ORDER BY p.created_at DESC
 ");
@@ -364,10 +808,17 @@ $passports = $stmt->fetchAll();
 ?>
 
 <div class="container-fluid">
-    <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
-        <h3 class="fw-bold mb-0"><i class="fas fa-briefcase me-2 text-success"></i> <?php echo $page_title; ?></h3>
+    <div class="page-toolbar-card p-3 p-lg-4 mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+            <div class="toolbar-title">
+                <span class="toolbar-title-icon"><i class="fas fa-briefcase"></i></span>
+                <div>
+                    <h3 class="fw-bold mb-0"><?php echo $page_title; ?></h3>
+                    <div class="toolbar-subtitle">عرض مرتب للمعاملات مع فلترة مباشرة حسب الحالة والجهة.</div>
+                </div>
+            </div>
 
-        <form method="GET" class="d-flex flex-wrap gap-2 align-items-center flex-grow-1 justify-content-end">
+            <form method="GET" class="toolbar-form d-flex flex-wrap gap-2 align-items-center flex-grow-1 justify-content-end">
             <?php if (has_permission('view_all_passports')): ?>
                 <select name="agent_filter" class="form-select rounded-pill shadow-sm border-0" style="width: 180px;" onchange="this.form.submit()">
                     <option value="">كل الوكلاء</option>
@@ -383,6 +834,15 @@ $passports = $stmt->fetchAll();
                 </select>
             <?php endif; ?>
 
+            <select name="status_filter" class="form-select rounded-pill" style="width: 180px;" onchange="this.form.submit()">
+                <option value="">كل الحالات</option>
+                <?php foreach ($wf_steps ?: [] as $step): ?>
+                    <option value="<?php echo $step['status_id']; ?>" <?php echo (string)$status_filter === (string)$step['status_id'] ? 'selected' : ''; ?>>
+                        <?php echo htmlspecialchars($step['step_name']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+
             <div class="input-group" style="width: 250px;">
                 <span class="input-group-text bg-white border-0 shadow-sm rounded-start-pill"><i class="fas fa-search text-muted"></i></span>
                 <input type="text" id="tableSearch" class="form-control border-0 shadow-sm rounded-end-pill" placeholder="بحث سريع...">
@@ -393,53 +853,8 @@ $passports = $stmt->fetchAll();
                     <i class="fas fa-plus-circle me-2"></i> إضافة
                 </button>
             <?php endif; ?>
-        </form>
-    </div>
-
-    <!-- الإحصائيات (البطاقات العلوية) -->
-    <div class="row g-2 mb-4 overflow-auto flex-nowrap pb-3 custom-scrollbar px-1">
-        <!-- بطاقة الإجمالي العام -->
-        <div class="col-auto">
-            <div class="card border-0 shadow-sm rounded-4 p-3 bg-primary text-white h-100 mini-card position-relative overflow-hidden" style="min-width: 220px;">
-                <div class="position-absolute end-0 top-0 opacity-10" style="font-size: 4rem; transform: translate(15%, -15%);"><i class="fas fa-globe"></i></div>
-                <div class="stat-label text-white opacity-75">إجمالي المعاملات</div>
-                <div class="stat-value mb-3"><?php echo count($passports); ?></div>
-
-                <div class="d-flex gap-3 mt-auto">
-                    <div class="sub-stat text-white opacity-75">اليوم: <span class="sub-stat-value text-white"><?php echo $total_stats['today']; ?></span></div>
-                    <div class="sub-stat text-white opacity-75">أسبوع: <span class="sub-stat-value text-white"><?php echo $total_stats['this_week']; ?></span></div>
-                    <?php
-                    $diff = $total_stats['this_month'] - $total_stats['last_month'];
-                    $color = $diff >= 0 ? 'text-white' : 'text-danger';
-                    ?>
-                    <div class="sub-stat text-white opacity-75 ms-auto"><i class="fas <?php echo $diff >= 0 ? 'fa-caret-up' : 'fa-caret-down'; ?> <?php echo $color; ?>"></i> <?php echo abs($diff); ?></div>
-                </div>
-                <a href="work_visa.php" class="stretched-link"></a>
-            </div>
+            </form>
         </div>
-
-        <?php foreach ($status_stats as $stat):
-            $isActive = isset($_GET['status_filter']) && $_GET['status_filter'] == $stat['id'];
-        ?>
-            <div class="col-auto">
-                <div class="card border-0 shadow-sm rounded-4 p-3 h-100 mini-card transition-all <?php echo $isActive ? 'ring-2 ring-primary shadow-lg' : ''; ?>"
-                    style="min-width: 200px; border-top: 4px solid <?php echo $stat['status_color']; ?> !important;">
-                    <div class="stat-label text-truncate"><?php echo $stat['status_name']; ?></div>
-                    <div class="stat-value mb-3" style="color: <?php echo $stat['status_color']; ?>;"><?php echo $stat['total']; ?></div>
-
-                    <div class="d-flex gap-3 mt-auto">
-                        <div class="sub-stat">اليوم: <span class="sub-stat-value"><?php echo $stat['today']; ?></span></div>
-                        <div class="sub-stat">أسبوع: <span class="sub-stat-value"><?php echo $stat['this_week']; ?></span></div>
-                        <?php
-                        $diff = $stat['this_month'] - $stat['last_month'];
-                        $color = $diff >= 0 ? 'text-success' : 'text-danger';
-                        ?>
-                        <div class="sub-stat ms-auto"><i class="fas <?php echo $diff >= 0 ? 'fa-caret-up' : 'fa-caret-down'; ?> <?php echo $color; ?>"></i> <?php echo abs($diff); ?></div>
-                    </div>
-                    <a href="work_visa.php?status_filter=<?php echo $stat['id']; ?><?php echo !empty($agent_filter) ? '&agent_filter=' . $agent_filter : ''; ?><?php echo !empty($branch_filter) ? '&branch_filter=' . $branch_filter : ''; ?>" class="stretched-link"></a>
-                </div>
-            </div>
-        <?php endforeach; ?>
     </div>
 
     <!-- الإشعارات -->
@@ -477,40 +892,24 @@ $passports = $stmt->fetchAll();
         </div>
     <?php endif; ?>
 
-    <!-- شريط الفلترة السريعة -->
-    <div class="card border-0 shadow-sm rounded-4 p-2 mb-4">
-        <div class="d-flex align-items-center gap-2 overflow-auto custom-scrollbar">
-            <span class="text-muted small text-nowrap ms-2"><i class="fas fa-filter me-1"></i> تصفية سريعة:</span>
-            <a href="work_visa.php" class="btn btn-sm rounded-pill text-nowrap <?php echo !isset($_GET['status_filter']) ? 'btn-dark' : 'btn-outline-secondary'; ?>">الكل</a>
-            <?php foreach ($wf_steps ?: [] as $step):
-                $active = isset($_GET['status_filter']) && $_GET['status_filter'] == $step['status_id'];
-            ?>
-                <a href="work_visa.php?status_filter=<?php echo $step['status_id']; ?>"
-                    class="btn btn-sm rounded-pill text-nowrap <?php echo $active ? 'btn-primary' : 'btn-outline-secondary'; ?>"
-                    style="<?php echo !$active ? "border-color: {$step['color']}; color: {$step['color']};" : ""; ?>">
-                    <?php echo $step['step_name']; ?>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
-
     <!-- الجدول الرئيسي -->
-    <div class="card border-0 shadow-sm rounded-4">
+    <div class="card border-0 rounded-4 workvisa-table-card">
         <div class="card-body p-0">
-            <div class="table-responsive">
+            <div class="table-responsive workvisa-table-wrap">
                 <table class="table table-hover align-middle mb-0">
                     <thead class="bg-light">
                         <tr>
                             <th class="px-4 py-3">العميل</th>
                             <?php if (has_permission('work_visa_show_sale_price')): ?>
-                                <th>العملة</th>
-                                <th>سعر الشراء</th>
-                                <th>سعر البيع</th>
+                                <th>المورد والشراء</th>
+                                <th>الحساب والبيع</th>
                             <?php endif; ?>
-                            <?php if (has_permission('work_visa_view_passport_no')): ?><th>رقم الجواز</th><?php endif; ?>
-                            <?php if (has_permission('work_visa_view_profession')): ?><th>المهنة</th><?php endif; ?>
-                            <?php if (has_permission('work_visa_view_attachments')): ?><th>المرفقات</th><?php endif; ?>
-                            <?php if (has_permission('work_visa_view_workflow') || has_permission('work_visa_view_history')): ?><th>الحالة / السجل</th><?php endif; ?>
+                            <?php if (has_permission('work_visa_view_passport_no') || has_permission('work_visa_view_workflow') || has_permission('work_visa_view_history') || has_permission('request_document_confirmation')): ?>
+                                <th>رقم الجواز / الحالة</th>
+                            <?php endif; ?>
+                            <?php if (has_permission('work_visa_view_attachments') || has_permission('work_visa_view_profession')): ?>
+                                <th>المرفقات / المهنة</th>
+                            <?php endif; ?>
                             <?php if (has_permission('work_visa_payment_status_view')): ?><th>حالة الدفع</th><?php endif; ?>
                             <th>التاريخ</th>
                             <th class="text-center">الإجراءات</th>
@@ -520,55 +919,102 @@ $passports = $stmt->fetchAll();
                         <?php foreach ($passports as $p): ?>
                             <tr>
                                 <td class="px-4">
-                                    <div class="fw-bold"><?php echo htmlspecialchars($p['full_name']); ?></div>
-                                    <div class="small text-muted font-monospace"><?php echo htmlspecialchars($p['full_name_en'] ?? '---'); ?></div>
+                                    <div class="person-cell">
+                                        <div class="person-name"><?php echo htmlspecialchars($p['full_name']); ?></div>
+                                        <div class="person-name-en font-monospace clamp-1"><?php echo htmlspecialchars($p['full_name_en'] ?? '---'); ?></div>
+                                        <div class="person-meta clamp-1">
+                                            <?php echo htmlspecialchars($p['agent_name'] ?: ($p['branch_name'] ?: 'بدون جهة')); ?>
+                                        </div>
+                                    </div>
                                 </td>
                                 <?php if (has_permission('work_visa_show_sale_price')): ?>
-                                    <td class="fw-bold text-center"><?php echo htmlspecialchars($p['currency_symbol'] ?: ($p['currency_name'] ?: '---')); ?></td>
-                                    <td class="fw-bold text-primary small">
-                                        <?php
-                                        if (isset($p['purchase_price']) && $p['purchase_price'] > 0) {
-                                            echo number_format($p['purchase_price'], 2);
-                                        } else {
-                                            $agent_price = $p['agent_price'] ?? 0;
-                                            $branch_price = $p['branch_price'] ?? 0;
-                                            echo number_format($agent_price ?: $branch_price, 2);
-                                        }
-                                        ?>
+                                    <?php $currencyMark = trim((string)($p['currency_symbol'] ?: ($p['currency_name'] ?: ''))); ?>
+                                    <td class="small">
+                                        <div class="finance-mini-card">
+                                            <div class="mini-label">المورد</div>
+                                            <div class="mini-name clamp-2"><?php echo htmlspecialchars($p['purchase_supplier_name'] ?: 'المورد غير محدد'); ?></div>
+                                            <div class="mini-label">سعر الشراء</div>
+                                            <div class="mini-amount" style="color:#dc2626;">
+                                                <?php
+                                                $purchaseAmount = isset($p['purchase_price']) ? (float)$p['purchase_price'] : 0;
+                                                echo number_format($purchaseAmount, 2);
+                                                echo $currencyMark !== '' ? ' ' . htmlspecialchars($currencyMark) : '';
+                                                ?>
+                                            </div>
+                                        </div>
                                     </td>
-                                    <td class="fw-bold text-success small"><?php echo number_format($p['sale_price'] ?? 0, 2); ?></td>
-                                <?php endif; ?>
-                                <?php if (has_permission('work_visa_view_passport_no')): ?>
-                                    <td><span class="badge bg-light text-dark border"><?php echo htmlspecialchars($p['passport_number']); ?></span></td>
-                                <?php endif; ?>
-                                <?php if (has_permission('work_visa_view_profession')): ?>
-                                    <td><?php echo htmlspecialchars($p['profession_name'] ?? '---'); ?></td>
-                                <?php endif; ?>
-                                <?php if (has_permission('work_visa_view_attachments')): ?>
-                                    <td>
-                                        <div class="d-flex gap-1 text-muted">
-                                            <i class="fas fa-passport <?php echo !empty($p['passport_image']) ? 'text-success' : 'opacity-25'; ?>" title="الجواز"></i>
-                                            <i class="fas fa-user <?php echo !empty($p['personal_photo']) ? 'text-success' : 'opacity-25'; ?>" title="الشخصية"></i>
-                                            <i class="fas fa-file-contract <?php echo !empty($p['authorization_image']) ? 'text-success' : 'opacity-25'; ?>" title="التفويض"></i>
+                                    <td class="small">
+                                        <div class="finance-mini-card">
+                                            <div class="mini-label">الحساب</div>
+                                            <div class="mini-name clamp-2">
+                                                <?php
+                                                $salesAccountName = trim((string)($p['sales_account_name'] ?? ''));
+                                                echo htmlspecialchars($salesAccountName ?: 'الحساب غير محدد');
+                                                ?>
+                                            </div>
+                                            <div class="mini-label">سعر البيع</div>
+                                            <div class="mini-amount" style="color:#16a34a;">
+                                                <?php
+                                                $saleAmount = (float)($p['sale_price'] ?? 0);
+                                                echo number_format($saleAmount, 2);
+                                                echo $currencyMark !== '' ? ' ' . htmlspecialchars($currencyMark) : '';
+                                                ?>
+                                            </div>
                                         </div>
                                     </td>
                                 <?php endif; ?>
-                                <?php if (has_permission('work_visa_view_workflow') || has_permission('work_visa_view_history') || has_permission('request_document_confirmation')): ?>
+                                <?php if (has_permission('work_visa_view_passport_no') || has_permission('work_visa_view_workflow') || has_permission('work_visa_view_history') || has_permission('request_document_confirmation')): ?>
                                     <td>
-                                        <div class="d-flex flex-column align-items-center">
-                                            <span class="badge rounded-pill" style="background-color: <?php echo $p['status_color']; ?>20; color: <?php echo $p['status_color']; ?>; border: 1px solid <?php echo $p['status_color']; ?>;">
-                                                <?php echo htmlspecialchars($p['status_name']); ?>
-                                            </span>
-                                            <?php
-                                            // التحقق من وجود نواقص في الوثائق
-                                            $stmt_missing = $pdo->prepare("SELECT COUNT(*) FROM profession_requirements pr LEFT JOIN work_visa_checklist wvc ON pr.id = wvc.requirement_id AND wvc.passport_id = ? WHERE pr.profession_id = ? AND (wvc.is_completed = 0 OR wvc.is_completed IS NULL OR (wvc.relayer_verified = 0 AND ? IN ('admin', 'relayer')))");
-                                            $stmt_missing->execute([$p['id'], $p['profession_id'], $_SESSION['role']]);
-                                            $missing_count = $stmt_missing->fetchColumn();
+                                        <div class="d-flex flex-column align-items-center gap-2">
+                                            <?php if (has_permission('work_visa_view_passport_no')): ?>
+                                                <span class="badge bg-light text-dark border rounded-pill px-3 py-2"><?php echo htmlspecialchars($p['passport_number']); ?></span>
+                                            <?php endif; ?>
+                                            <?php if (has_permission('work_visa_view_workflow') || has_permission('work_visa_view_history') || has_permission('request_document_confirmation')): ?>
+                                                <div class="d-flex flex-column align-items-center status-stack">
+                                                    <span class="badge rounded-pill" style="background-color: <?php echo $p['status_color']; ?>20; color: <?php echo $p['status_color']; ?>; border: 1px solid <?php echo $p['status_color']; ?>;">
+                                                        <?php echo htmlspecialchars($p['status_name']); ?>
+                                                    </span>
+                                                    <?php
+                                                    $canReviewUnverifiedChecklist = in_array((string)($_SESSION['role'] ?? ''), ['admin', 'developer', 'relayer'], true) ? 1 : 0;
+                                                    $requirementGender = strtolower((string)($p['gender'] ?? ''));
+                                                    $requirementGender = $requirementGender === 'female' ? 'female' : ($requirementGender === 'male' ? 'male' : 'both');
+                                                    $stmt_missing = $pdo->prepare("SELECT COUNT(*) FROM profession_requirements pr LEFT JOIN work_visa_checklist wvc ON pr.id = wvc.requirement_id AND wvc.passport_id = ? WHERE pr.profession_id = ? AND COALESCE(pr.gender, 'both') IN ('both', ?) AND (wvc.is_completed = 0 OR wvc.is_completed IS NULL OR (wvc.relayer_verified = 0 AND ? = 1))");
+                                                    $stmt_missing->execute([$p['id'], $p['profession_id'], $requirementGender, $canReviewUnverifiedChecklist]);
+                                                    $missing_count = $stmt_missing->fetchColumn();
 
-                                            if ($missing_count > 0 && ($p['status_name'] == 'تسليم للفرع الرئيسي' || $p['status_name'] == 'طلب تأكيد استلام وثائق')): ?>
-                                                <button class="btn btn-xs btn-danger extra-small rounded-pill px-2 mt-1 view-details" data-id="<?php echo $p['id']; ?>" data-tab="workflow">
-                                                    <i class="fas fa-exclamation-triangle me-1"></i> وثائق ناقصة (<?php echo $missing_count; ?>)
-                                                </button>
+                                                    if ($missing_count > 0 && ($p['status_name'] == 'تسليم للفرع الرئيسي' || $p['status_name'] == 'طلب تأكيد استلام وثائق')): ?>
+                                                        <button class="btn btn-xs btn-danger extra-small rounded-pill px-2 mt-1 view-details" data-id="<?php echo $p['id']; ?>" data-tab="workflow">
+                                                            <i class="fas fa-exclamation-triangle me-1"></i> وثائق ناقصة (<?php echo $missing_count; ?>)
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                <?php endif; ?>
+
+                                <?php if (has_permission('work_visa_view_attachments') || has_permission('work_visa_view_profession')): ?>
+                                    <td>
+                                        <div class="attachment-profession-card text-center">
+                                            <?php if (has_permission('work_visa_view_attachments')): ?>
+                                                <div class="mini-label">المرفقات</div>
+                                                <div class="attachment-icons-row">
+                                                    <span class="attachment-icon-chip <?php echo !empty($p['passport_image']) ? 'is-filled' : ''; ?>" title="الجواز">
+                                                        <i class="fas fa-passport"></i>
+                                                    </span>
+                                                    <span class="attachment-icon-chip <?php echo !empty($p['personal_photo']) ? 'is-filled' : ''; ?>" title="الشخصية">
+                                                        <i class="fas fa-user"></i>
+                                                    </span>
+                                                    <span class="attachment-icon-chip <?php echo !empty($p['authorization_image']) ? 'is-filled' : ''; ?>" title="التفويض">
+                                                        <i class="fas fa-file-contract"></i>
+                                                    </span>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (has_permission('work_visa_view_profession')): ?>
+                                                <div class="mini-label <?php echo has_permission('work_visa_view_attachments') ? 'mt-1' : ''; ?>">المهنة</div>
+                                                <div class="profession-badge-card clamp-2">
+                                                    <?php echo htmlspecialchars($p['profession_name'] ?? '---'); ?>
+                                                </div>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -576,21 +1022,51 @@ $passports = $stmt->fetchAll();
                                 <?php if (has_permission('work_visa_payment_status_view')): ?>
                                     <td>
                                         <?php
-                                        $pay_status = $p['payment_status'] ?? 'unpaid';
                                         $pay_badges = [
                                             'unpaid' => '<span class="badge bg-danger-subtle text-danger rounded-pill">غير مدفوع</span>',
+                                            'partial' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
                                             'partially_paid' => '<span class="badge bg-warning-subtle text-warning rounded-pill">مدفوع جزئياً</span>',
                                             'fully_paid' => '<span class="badge bg-success-subtle text-success rounded-pill">مدفوع بالكامل</span>',
                                             'awaiting_approval' => '<span class="badge bg-info-subtle text-info rounded-pill">بانتظار الاعتماد</span>',
                                             'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل مالياً</span>'
                                         ];
-                                        echo $pay_badges[$pay_status] ?? $pay_status;
+                                        $invoice_badges = [
+                                            'draft' => '<span class="badge bg-secondary-subtle text-secondary rounded-pill">مسودة</span>',
+                                            'posted' => '<span class="badge bg-primary-subtle text-primary rounded-pill">مرحل</span>',
+                                            'cancelled' => '<span class="badge bg-danger-subtle text-danger rounded-pill">ملغي</span>'
+                                        ];
                                         ?>
+                                        <div class="payment-stack">
+                                            <div class="payment-box small">
+                                                <div class="payment-box-title text-success">البيع</div>
+                                                <div class="d-flex flex-wrap gap-1">
+                                                    <?php echo $pay_badges[$p['sales_payment_status'] ?? 'unpaid'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                                    <?php echo $invoice_badges[$p['sales_invoice_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>'; ?>
+                                                </div>
+                                            </div>
+                                            <div class="payment-box small">
+                                                <div class="payment-box-title text-primary">الشراء</div>
+                                                <div class="d-flex flex-wrap gap-1">
+                                                    <?php echo !empty($p['purchase_invoice_id']) ? ($pay_badges[$p['purchase_payment_status'] ?? 'unpaid'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : '<span class="badge bg-light text-dark rounded-pill">لا توجد</span>'; ?>
+                                                    <?php echo !empty($p['purchase_invoice_id']) ? ($invoice_badges[$p['purchase_invoice_status'] ?? 'draft'] ?? '<span class="badge bg-light text-dark rounded-pill">---</span>') : ''; ?>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </td>
                                 <?php endif; ?>
-                                <td class="small text-muted"><?php echo date('Y-m-d', strtotime($p['created_at'])); ?></td>
+                                <td class="record-date"><?php echo date('Y-m-d', strtotime($p['created_at'])); ?></td>
                                 <td class="text-center">
-                                    <div class="btn-group">
+                                    <?php
+                                    $salesStatus = $p['sales_invoice_status'] ?? 'draft';
+                                    $purchaseStatus = $p['purchase_invoice_status'] ?? (!empty($p['purchase_invoice_id']) ? 'draft' : null);
+                                    $hasSalesInvoice = !empty($p['sales_invoice_id']);
+                                    $hasPurchaseInvoice = !empty($p['purchase_invoice_id']);
+                                    $hasPostedInvoice = ($salesStatus === 'posted') || ($purchaseStatus === 'posted');
+                                    $hasDraftInvoice = ($salesStatus === 'draft') || ($purchaseStatus === 'draft');
+                                    $canModifyRow = in_array($salesStatus, ['draft', 'cancelled'], true)
+                                        && (empty($p['purchase_invoice_id']) || in_array((string)$purchaseStatus, ['draft', 'cancelled'], true));
+                                    ?>
+                                    <div class="financial-actions-wrap">
                                         <?php if (has_permission('work_visa_view')): ?>
                                             <button class="btn btn-sm btn-outline-info view-details" data-id="<?php echo $p['id']; ?>" title="التفاصيل"><i class="fas fa-eye"></i></button>
                                         <?php endif; ?>
@@ -608,8 +1084,10 @@ $passports = $stmt->fetchAll();
                                         <?php
                                         if (has_permission('document_receiver_confirm')):
                                             // تحقق من وجود وثائق غير مؤكدة لهذه المهنة
-                                            $stmt_missing = $pdo->prepare("SELECT COUNT(*) FROM profession_requirements pr LEFT JOIN work_visa_checklist wvc ON pr.id = wvc.requirement_id AND wvc.passport_id = ? WHERE pr.profession_id = ? AND (wvc.relayer_verified = 0 OR wvc.relayer_verified IS NULL)");
-                                            $stmt_missing->execute([$p['id'], $p['profession_id']]);
+                                            $requirementGender = strtolower((string)($p['gender'] ?? ''));
+                                            $requirementGender = $requirementGender === 'female' ? 'female' : ($requirementGender === 'male' ? 'male' : 'both');
+                                            $stmt_missing = $pdo->prepare("SELECT COUNT(*) FROM profession_requirements pr LEFT JOIN work_visa_checklist wvc ON pr.id = wvc.requirement_id AND wvc.passport_id = ? WHERE pr.profession_id = ? AND COALESCE(pr.gender, 'both') IN ('both', ?) AND (wvc.relayer_verified = 0 OR wvc.relayer_verified IS NULL)");
+                                            $stmt_missing->execute([$p['id'], $p['profession_id'], $requirementGender]);
                                             $missing_count = $stmt_missing->fetchColumn();
 
                                             if ($missing_count > 0): ?>
@@ -621,12 +1099,128 @@ $passports = $stmt->fetchAll();
                                             <a href="print_work_visa.php?id=<?php echo $p['id']; ?>" target="_blank" class="btn btn-sm btn-outline-secondary" title="طباعة"><i class="fas fa-print"></i></a>
                                         <?php endif; ?>
 
-                                        <?php if (has_permission('work_visa_edit')): ?>
-                                            <button class="btn btn-sm btn-outline-primary edit-visa" data-id="<?php echo $p['id']; ?>" title="تعديل"><i class="fas fa-edit"></i></button>
+                                        <?php if (has_permission('work_visa_financial_post') && $hasDraftInvoice): ?>
+                                            <div class="financial-action-group">
+                                                <button class="financial-action-btn fin-post" type="button" data-action-menu-toggle="post-<?php echo $p['id']; ?>" title="خيارات الترحيل">
+                                                    <i class="fas fa-file-export"></i>
+                                                    <span>الترحيل</span>
+                                                    <i class="fas fa-chevron-down small"></i>
+                                                </button>
+                                                <div class="financial-action-menu" id="post-<?php echo $p['id']; ?>">
+                                                    <div class="financial-action-menu-title">خيارات الترحيل</div>
+                                                    <button class="financial-action-menu-item post-option <?php echo (($salesStatus === 'draft') && ($purchaseStatus === 'draft')) ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if (($salesStatus === 'draft') && ($purchaseStatus === 'draft')): ?>
+                                                                onclick="WorkVisa.postFinance(<?php echo $p['id']; ?>, 'all')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-layer-group"></i>
+                                                        <span>ترحيل الكل</span>
+                                                    </button>
+                                                    <button class="financial-action-menu-item post-option <?php echo ($hasSalesInvoice && $salesStatus === 'draft') ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if ($hasSalesInvoice && $salesStatus === 'draft'): ?>
+                                                                onclick="WorkVisa.postFinance(<?php echo $p['id']; ?>, 'sales')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-arrow-up-right-from-square"></i>
+                                                        <span>ترحيل البيع</span>
+                                                    </button>
+                                                    <button class="financial-action-menu-item post-option <?php echo ($hasPurchaseInvoice && $purchaseStatus === 'draft') ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if ($hasPurchaseInvoice && $purchaseStatus === 'draft'): ?>
+                                                                onclick="WorkVisa.postFinance(<?php echo $p['id']; ?>, 'purchase')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-cart-plus"></i>
+                                                        <span>ترحيل الشراء</span>
+                                                    </button>
+                                                </div>
+                                            </div>
                                         <?php endif; ?>
 
-                                        <?php if (has_permission('work_visa_delete')): ?>
-                                            <a href="passports.php?delete_id=<?php echo $p['id']; ?>&redirect=work_visa.php" class="btn btn-sm btn-outline-danger" title="حذف" onclick="return confirm('هل أنت متأكد؟')"><i class="fas fa-trash"></i></a>
+                                        <?php if (has_permission('work_visa_financial_post') && $hasPostedInvoice): ?>
+                                            <div class="financial-action-group">
+                                                <button class="financial-action-btn fin-unpost" type="button" data-action-menu-toggle="unpost-<?php echo $p['id']; ?>" title="خيارات إلغاء الترحيل">
+                                                    <i class="fas fa-rotate-left"></i>
+                                                    <span>إلغاء الترحيل</span>
+                                                    <i class="fas fa-chevron-down small"></i>
+                                                </button>
+                                                <div class="financial-action-menu" id="unpost-<?php echo $p['id']; ?>">
+                                                    <div class="financial-action-menu-title">خيارات إلغاء الترحيل</div>
+                                                    <button class="financial-action-menu-item unpost-option <?php echo (($salesStatus === 'posted') && ($purchaseStatus === 'posted')) ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if (($salesStatus === 'posted') && ($purchaseStatus === 'posted')): ?>
+                                                                onclick="WorkVisa.unpostFinance(<?php echo $p['id']; ?>, 'all')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-layer-group"></i>
+                                                        <span>إلغاء ترحيل الكل</span>
+                                                    </button>
+                                                    <button class="financial-action-menu-item unpost-option <?php echo ($hasSalesInvoice && $salesStatus === 'posted') ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if ($hasSalesInvoice && $salesStatus === 'posted'): ?>
+                                                                onclick="WorkVisa.unpostFinance(<?php echo $p['id']; ?>, 'sales')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-arrow-rotate-left"></i>
+                                                        <span>إلغاء ترحيل البيع</span>
+                                                    </button>
+                                                    <button class="financial-action-menu-item unpost-option <?php echo ($hasPurchaseInvoice && $purchaseStatus === 'posted') ? '' : 'disabled'; ?>"
+                                                            type="button"
+                                                            <?php if ($hasPurchaseInvoice && $purchaseStatus === 'posted'): ?>
+                                                                onclick="WorkVisa.unpostFinance(<?php echo $p['id']; ?>, 'purchase')"
+                                                            <?php endif; ?>>
+                                                        <i class="fas fa-clock-rotate-left"></i>
+                                                        <span>إلغاء ترحيل الشراء</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if ($canModifyRow && (has_permission('work_visa_edit') || has_permission('work_visa_delete'))): ?>
+                                            <div class="financial-action-group">
+                                                <button class="financial-action-btn" type="button" data-action-menu-toggle="manage-<?php echo $p['id']; ?>" title="إدارة المعاملة" style="background: rgba(59, 130, 246, 0.12); color: #1d4ed8;">
+                                                    <i class="fas fa-gear"></i>
+                                                    <span>إدارة</span>
+                                                    <i class="fas fa-chevron-down small"></i>
+                                                </button>
+                                                <div class="financial-action-menu" id="manage-<?php echo $p['id']; ?>">
+                                                    <div class="financial-action-menu-title">إدارة المعاملة</div>
+                                                    <?php if (has_permission('work_visa_edit')): ?>
+                                                        <button class="financial-action-menu-item manage-option edit-visa" type="button" data-id="<?php echo $p['id']; ?>">
+                                                            <i class="fas fa-pen-to-square"></i>
+                                                            <span>تعديل المعاملة</span>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if (has_permission('work_visa_delete')): ?>
+                                                        <button class="financial-action-menu-item delete-option <?php echo ($hasSalesInvoice || $hasPurchaseInvoice) ? '' : 'disabled'; ?>"
+                                                                type="button"
+                                                                <?php if ($hasSalesInvoice || $hasPurchaseInvoice): ?>
+                                                                    onclick="WorkVisa.deleteFinance(<?php echo $p['id']; ?>, 'all')"
+                                                                <?php endif; ?>>
+                                                            <i class="fas fa-trash-can"></i>
+                                                            <span>حذف الكل</span>
+                                                        </button>
+                                                        <button class="financial-action-menu-item delete-option <?php echo $hasSalesInvoice ? '' : 'disabled'; ?>"
+                                                                type="button"
+                                                                <?php if ($hasSalesInvoice): ?>
+                                                                    onclick="WorkVisa.deleteFinance(<?php echo $p['id']; ?>, 'sales')"
+                                                                <?php endif; ?>>
+                                                            <i class="fas fa-file-invoice-dollar"></i>
+                                                            <span>حذف البيع فقط</span>
+                                                        </button>
+                                                        <button class="financial-action-menu-item delete-option <?php echo $hasPurchaseInvoice ? '' : 'disabled'; ?>"
+                                                                type="button"
+                                                                <?php if ($hasPurchaseInvoice): ?>
+                                                                    onclick="WorkVisa.deleteFinance(<?php echo $p['id']; ?>, 'purchase')"
+                                                                <?php endif; ?>>
+                                                            <i class="fas fa-file-invoice"></i>
+                                                            <span>حذف الشراء فقط</span>
+                                                        </button>
+                                                        <a href="passports.php?delete_id=<?php echo $p['id']; ?>&redirect=work_visa.php"
+                                                           class="financial-action-menu-item delete-option delete-passport-record">
+                                                            <i class="fas fa-trash"></i>
+                                                            <span>حذف المعاملة</span>
+                                                        </a>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -643,9 +1237,11 @@ $passports = $stmt->fetchAll();
 <div class="modal fade" id="addModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST" enctype="multipart/form-data" action="passports.php?add_passport=1">
+            <form method="POST" enctype="multipart/form-data" action="passports.php?add_passport=1" id="workVisaAddForm">
                 <input type="hidden" name="transaction_type" value="work_visa">
                 <input type="hidden" name="redirect" value="work_visa.php">
+                <input type="hidden" name="confirm_duplicate" id="add_confirm_duplicate" value="0">
+                <input type="hidden" name="add_passport" value="1">
                 <div class="modal-header bg-success text-white border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة معاملة جديدة</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -654,10 +1250,10 @@ $passports = $stmt->fetchAll();
                     <div class="row g-3">
                         <!-- Always show branch_id and agent_id as hidden fields based on current user -->
                         <?php if ($user_agent_id): ?>
-                            <input type="hidden" name="agent_id" value="<?php echo $user_agent_id; ?>">
+                            <input type="hidden" name="agent_id" id="add_agent_id" value="<?php echo $user_agent_id; ?>">
                         <?php endif; ?>
                         <?php if ($user_branch_id): ?>
-                            <input type="hidden" name="branch_id" value="<?php echo $user_branch_id; ?>">
+                            <input type="hidden" name="branch_id" id="add_branch_id" value="<?php echo $user_branch_id; ?>">
                         <?php endif; ?>
 
                         <!-- السطر الأول: الاسم والجواز -->
@@ -683,6 +1279,7 @@ $passports = $stmt->fetchAll();
                                     <option value="<?php echo htmlspecialchars($country['country_name']); ?>" data-code="<?php echo htmlspecialchars($country['country_code']); ?>"><?php echo htmlspecialchars($country['country_name']); ?> (<?php echo htmlspecialchars($country['country_code']); ?>)</option>
                                 <?php endforeach; ?>
                             </select>
+                            <div id="add_nationality_rule" class="extra-small text-muted mt-1"></div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label fw-bold small">الجنس (Sex)</label>
@@ -691,6 +1288,7 @@ $passports = $stmt->fetchAll();
                                 <option value="Male">ذكر (Male)</option>
                                 <option value="Female">أنثى (Female)</option>
                             </select>
+                            <div id="add_gender_rule" class="extra-small text-muted mt-1"></div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label fw-bold small text-success">المهنة</label>
@@ -746,26 +1344,40 @@ $passports = $stmt->fetchAll();
                             <input type="file" name="personal_photo" class="form-control form-control-sm rounded-3" accept="image/*">
                         </div>
 
-                        <!-- البيانات المالية الموحدة -->
-                        <div class="col-12 mt-3">
-                            <h6 class="text-primary fw-bold mb-2"><i class="fas fa-dollar-sign me-2"></i> البيانات المالية</h6>
+                        <?php if ($settings['show_profession_requirements'] ?? 1): ?>
+                            <div class="col-12" id="add_requirements_container" style="display:none;">
+                                <label class="form-label fw-bold text-warning small"><i class="fas fa-tasks me-1"></i> متطلبات المهنة:</label>
+                                <div class="d-flex flex-wrap gap-2 p-2 bg-light rounded-3 border" id="add_requirements_list"></div>
+                            </div>
+                        <?php endif; ?>
+                        <div class="col-12">
+                            <div id="add_rule_alerts" class="alert alert-warning rounded-4 py-2 px-3 small d-none mb-0"></div>
                         </div>
+
+                        <!-- البيانات المالية الموحدة -->
                         <?php
                         // إعداد بيانات الفاتورة الحالية
                         $current_invoice = [
-                            'invoice_date' => date('Y-m-d'),
+                            'invoice_date' => normalize_datetime_db(null),
                             'branch_id' => $_SESSION['branch_id'] ?? null,
-                            'source_type' => 'تأشيرات العمل',
-                            'delivery_type' => 'cash',
+                            'source_type' => 'فيز العمل',
+                            'delivery_type' => $settings['default_delivery_type'] ?? 'draft',
+                            'sale_currency_id' => $user_defaults['currency_id'] ?? 1,
                             'total_amount' => $user_defaults['sale_price'] ?? 0,
                             'discount' => 0,
+                            'record_purchase' => '1',
                             'cost_amount' => $user_defaults['purchase_price'] ?? 0,
-                            'amount_received' => 0,
+                            'received_amount' => 0,
                             'currency_id' => $user_defaults['currency_id'] ?? 1,
                             'description' => ''
                         ];
+                        $financial_fields_prefix = 'add_';
                         $financial_fields_select2_parent = '#addModal';
+                        $financial_fields_form_selector = '#workVisaAddForm';
                         $financial_fields_show_service_select = false;
+                        $financial_fields_header_layout = 'split_rows';
+                        $financial_fields_title_layout = 'block';
+                        $financial_fields_hide_service_accounts = true;
                         include '../includes/financial_fields.php';
                         ?>
                         <div class="col-md-12 mt-2">
@@ -809,7 +1421,7 @@ $passports = $stmt->fetchAll();
 <div class="modal fade" id="editModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
-            <form method="POST" enctype="multipart/form-data" action="passports.php?update_passport=1">
+            <form method="POST" enctype="multipart/form-data" action="passports.php?update_passport=1" id="workVisaEditForm">
                 <input type="hidden" name="passport_id" id="edit_passport_id">
                 <input type="hidden" name="transaction_type" value="work_visa">
                 <input type="hidden" name="redirect" value="work_visa.php">
@@ -821,10 +1433,10 @@ $passports = $stmt->fetchAll();
                     <div class="row g-3">
                         <!-- Always show branch_id and agent_id as hidden fields based on current user -->
                         <?php if ($user_agent_id): ?>
-                            <input type="hidden" name="agent_id" value="<?php echo $user_agent_id; ?>">
+                            <input type="hidden" name="agent_id" id="edit_agent_id" value="<?php echo $user_agent_id; ?>">
                         <?php endif; ?>
                         <?php if ($user_branch_id): ?>
-                            <input type="hidden" name="branch_id" value="<?php echo $user_branch_id; ?>">
+                            <input type="hidden" name="branch_id" id="edit_branch_id" value="<?php echo $user_branch_id; ?>">
                         <?php endif; ?>
 
                         <!-- السطر الأول -->
@@ -850,6 +1462,7 @@ $passports = $stmt->fetchAll();
                                     <option value="<?php echo htmlspecialchars($country['country_name']); ?>" data-code="<?php echo htmlspecialchars($country['country_code']); ?>"><?php echo htmlspecialchars($country['country_name']); ?> (<?php echo htmlspecialchars($country['country_code']); ?>)</option>
                                 <?php endforeach; ?>
                             </select>
+                            <div id="edit_nationality_rule" class="extra-small text-muted mt-1"></div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label fw-bold small">الجنس (Sex)</label>
@@ -858,6 +1471,7 @@ $passports = $stmt->fetchAll();
                                 <option value="Male">ذكر (Male)</option>
                                 <option value="Female">أنثى (Female)</option>
                             </select>
+                            <div id="edit_gender_rule" class="extra-small text-muted mt-1"></div>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label fw-bold small text-success">المهنة</label>
@@ -916,34 +1530,40 @@ $passports = $stmt->fetchAll();
                             <input type="hidden" name="passport_country_code" id="edit_passport_country_code">
                         </div>
 
-                        <?php if (has_permission('work_visa_edit_amount')): ?>
-                            <div class="col-12">
-                                <hr class="my-1">
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label fw-bold small">العملة</label>
-                                <select name="currency_id" id="edit_currency_id" class="form-select form-select-sm rounded-3">
-                                    <?php foreach ($currencies as $currency): ?>
-                                        <option value="<?php echo $currency['id']; ?>"><?php echo $currency['currency_name']; ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label fw-bold text-primary small">سعر الشراء</label>
-                                <input type="number" step="0.01" name="purchase_price" id="edit_purchase_price" class="form-control form-control-sm rounded-3 border-primary" <?php echo !$can_edit_purchase_price ? 'readonly' : ''; ?>>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label fw-bold text-success small">سعر البيع</label>
-                                <input type="number" step="0.01" name="sale_price" id="edit_sale_price" class="form-control form-control-sm rounded-3 border-success" <?php echo !$can_edit_sale_price ? 'readonly' : ''; ?>>
-                            </div>
-                        <?php endif; ?>
-
                         <?php if ($settings['show_profession_requirements'] ?? 1): ?>
                             <div class="col-12" id="edit_requirements_container" style="display:none;">
                                 <label class="form-label fw-bold text-warning small"><i class="fas fa-tasks me-1"></i> متطلبات المهنة:</label>
                                 <div class="d-flex flex-wrap gap-2 p-2 bg-light rounded-3 border" id="edit_requirements_list"></div>
                             </div>
                         <?php endif; ?>
+                        <div class="col-12">
+                            <div id="edit_rule_alerts" class="alert alert-warning rounded-4 py-2 px-3 small d-none mb-0"></div>
+                        </div>
+
+                        <?php
+                        $current_invoice = [
+                            'invoice_date' => normalize_datetime_db(null),
+                            'branch_id' => $_SESSION['branch_id'] ?? null,
+                            'source_type' => 'فيز العمل',
+                            'delivery_type' => $settings['default_delivery_type'] ?? 'draft',
+                            'sale_currency_id' => $user_defaults['currency_id'] ?? 1,
+                            'total_amount' => $user_defaults['sale_price'] ?? 0,
+                            'discount' => 0,
+                            'record_purchase' => '1',
+                            'cost_amount' => $user_defaults['purchase_price'] ?? 0,
+                            'received_amount' => 0,
+                            'currency_id' => $user_defaults['currency_id'] ?? 1,
+                            'description' => ''
+                        ];
+                        $financial_fields_prefix = 'edit_';
+                        $financial_fields_select2_parent = '#editModal';
+                        $financial_fields_form_selector = '#workVisaEditForm';
+                        $financial_fields_show_service_select = false;
+                        $financial_fields_header_layout = 'split_rows';
+                        $financial_fields_title_layout = 'block';
+                        $financial_fields_hide_service_accounts = true;
+                        include '../includes/financial_fields.php';
+                        ?>
 
                         <?php if (has_permission('work_visa_show_batch_link')): ?>
                             <div class="col-md-12">
@@ -966,6 +1586,8 @@ $passports = $stmt->fetchAll();
         </div>
     </div>
 </div>
+
+<div id="workVisaNoticeContainer" class="position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 1085; width: min(92vw, 720px);"></div>
 
 <!-- مودال التفاصيل (detailsModal) -->
 <div class="modal fade" id="detailsModal" tabindex="-1">
@@ -1005,6 +1627,145 @@ $passports = $stmt->fetchAll();
      * نظام JavaScript الموحد لصفحة تأشيرات العمل
      */
     const WorkVisa = {
+        showNotice(message, type = 'info') {
+            const typeMap = {
+                success: {
+                    swalIcon: 'success',
+                    title: 'تمت العملية بنجاح'
+                },
+                error: {
+                    swalIcon: 'error',
+                    title: 'حدث خطأ'
+                },
+                warning: {
+                    swalIcon: 'warning',
+                    title: 'تنبيه'
+                },
+                info: {
+                    swalIcon: 'info',
+                    title: 'معلومة'
+                }
+            };
+
+            const config = typeMap[type] || typeMap.info;
+            if (typeof Swal !== 'undefined') {
+                const Toast = Swal.mixin({
+                    toast: true,
+                    position: 'top',
+                    showConfirmButton: false,
+                    timer: 3600,
+                    timerProgressBar: true,
+                    customClass: {
+                        popup: 'shadow-lg rounded-4'
+                    },
+                    didOpen: toast => {
+                        toast.addEventListener('mouseenter', Swal.stopTimer);
+                        toast.addEventListener('mouseleave', Swal.resumeTimer);
+                    }
+                });
+
+                Toast.fire({
+                    icon: config.swalIcon,
+                    title: config.title,
+                    text: message
+                });
+                return;
+            }
+
+            const container = document.getElementById('workVisaNoticeContainer');
+            if (!container) {
+                window.alert(message);
+                return;
+            }
+
+            const notice = document.createElement('div');
+            notice.className = 'alert alert-info alert-dismissible fade show shadow-sm border-0 rounded-4 mb-2';
+            notice.innerHTML = `
+                <div class="d-flex align-items-start gap-2">
+                    <div class="flex-grow-1">
+                        <div class="fw-bold mb-1">${config.title}</div>
+                        <div>${message}</div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            `;
+            container.appendChild(notice);
+        },
+
+        escapeHtml(value = '') {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        },
+
+        async confirmDialog({
+            title = 'تأكيد العملية',
+            text = '',
+            html = '',
+            icon = 'question',
+            confirmText = 'نعم، متابعة',
+            cancelText = 'إلغاء',
+            reverseButtons = true
+        } = {}) {
+            if (typeof Swal !== 'undefined') {
+                const isDark = document.body.classList.contains('theme-dark');
+                const result = await Swal.fire({
+                    title,
+                    text: html ? undefined : text,
+                    html: html || undefined,
+                    icon,
+                    showCancelButton: true,
+                    confirmButtonText: confirmText,
+                    cancelButtonText: cancelText,
+                    reverseButtons,
+                    focusCancel: true,
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a',
+                    customClass: {
+                        popup: 'rounded-4 shadow-lg',
+                        confirmButton: 'btn btn-primary rounded-pill px-4 mx-1',
+                        cancelButton: (isDark ? 'btn btn-outline-light' : 'btn btn-light') + ' rounded-pill px-4 mx-1'
+                    },
+                    buttonsStyling: false
+                });
+                return !!result.isConfirmed;
+            }
+
+            return window.confirm(text || title);
+        },
+
+        async alertDialog({
+            title = 'تنبيه',
+            text = '',
+            html = '',
+            icon = 'info',
+            confirmText = 'حسنًا'
+        } = {}) {
+            if (typeof Swal !== 'undefined') {
+                const isDark = document.body.classList.contains('theme-dark');
+                await Swal.fire({
+                    title,
+                    text: html ? undefined : text,
+                    html: html || undefined,
+                    icon,
+                    confirmButtonText: confirmText,
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a',
+                    customClass: {
+                        popup: 'rounded-4 shadow-lg',
+                        confirmButton: 'btn btn-primary rounded-pill px-4'
+                    },
+                    buttonsStyling: false
+                });
+                return;
+            }
+
+            window.alert(text || title);
+        },
+
         // 1. تهيئة الأحداث
         init() {
             document.addEventListener('click', e => this.handleClicks(e));
@@ -1016,25 +1777,11 @@ $passports = $stmt->fetchAll();
                 this.openDetailsModal(passportId);
             }
 
-            // تهيئة منطق العملات
-            this.updateCurrencyLogic('add');
-
-            // تهيئة منطق الدفع
-            this.updatePaymentLogic('add');
-
             // ربط البحث الديناميكي
             const searchInput = document.getElementById('tableSearch');
             if (searchInput) {
                 searchInput.addEventListener('input', (e) => this.filterTable(e.target.value));
             }
-
-            // ربط أحداث تغيير العملات
-            document.getElementById('add_sale_currency_id')?.addEventListener('change', () => this.updateCurrencyLogic('add'));
-            document.getElementById('add_purchase_currency_id')?.addEventListener('change', () => this.updateCurrencyLogic('add'));
-            document.getElementById('add_invoice_exchange_rate')?.addEventListener('input', () => this.calculateEquivalent('add'));
-            document.getElementById('add_purchase_price')?.addEventListener('input', () => this.calculateEquivalent('add'));
-            document.getElementById('add_discount')?.addEventListener('input', () => this.validateDiscount('add'));
-            document.getElementById('add_sale_price')?.addEventListener('input', () => this.validateDiscount('add'));
 
             // ربط أحداث الإدخال المباشرة
             const setupPassportInput = (id) => {
@@ -1065,17 +1812,44 @@ $passports = $stmt->fetchAll();
             const addModalEl = document.getElementById('addModal');
             if (addModalEl) {
                 addModalEl.addEventListener('shown.bs.modal', () => {
+                    const duplicateInput = document.getElementById('add_confirm_duplicate');
+                    if (duplicateInput) duplicateInput.value = '0';
+                    this.syncAutoDescription('add', true);
                     const agentId = document.getElementById('add_agent_id')?.value;
                     const branchId = document.getElementById('add_branch_id')?.value;
                     if (agentId || branchId) {
                         this.loadServicePrice('add');
                     }
+                    const professionId = document.getElementById('add_profession_id')?.value;
+                    if (professionId) {
+                        this.loadProfessionRequirements(professionId, 'add');
+                    }
+                });
+            }
+
+            const addFormEl = document.getElementById('workVisaAddForm');
+            if (addFormEl) {
+                addFormEl.addEventListener('submit', async (e) => {
+                    if (addFormEl.dataset.skipDuplicateCheck === '1') {
+                        addFormEl.dataset.skipDuplicateCheck = '0';
+                        return;
+                    }
+                    e.preventDefault();
+                    const canSubmit = await this.checkDuplicateBeforeSubmit();
+                    if (!canSubmit) {
+                        return;
+                    }
+                    addFormEl.dataset.skipDuplicateCheck = '1';
+                    addFormEl.submit();
                 });
             }
 
             // ربط أحداث تغيير التواريخ للتحقق التلقائي
             document.querySelectorAll('.visa-date-input').forEach(input => {
-                input.addEventListener('change', (e) => this.validateField(e.target));
+                input.addEventListener('change', (e) => {
+                    this.validateField(e.target);
+                    this.updateRuleAlerts(e.target.id.startsWith('edit_') ? 'edit' : 'add');
+                });
             });
 
             // مستمع تغيير المهنة
@@ -1083,8 +1857,170 @@ $passports = $stmt->fetchAll();
                 if (e.target.classList.contains('profession-select')) {
                     this.loadProfessionRequirements(e.target.value, e.target.dataset.prefix);
                     this.loadServicePrice(e.target.dataset.prefix);
+                    this.syncAutoDescription(e.target.dataset.prefix);
+                    return;
+                }
+
+                if (['add_gender', 'edit_gender', 'add_nationality', 'edit_nationality'].includes(e.target.id)) {
+                    const prefix = e.target.id.startsWith('edit_') ? 'edit' : 'add';
+                    const professionId = document.getElementById(`${prefix}_profession_id`)?.value;
+                    if (professionId) {
+                        this.loadProfessionRequirements(professionId, prefix);
+                    } else {
+                        this.updateRuleAlerts(prefix);
+                    }
+                    return;
+                }
+
+                if (['add_passport_issue', 'edit_passport_issue'].includes(e.target.id)) {
+                    this.syncPassportExpiryFromIssueDate(e.target.id.startsWith('edit_') ? 'edit' : 'add');
+                    return;
+                }
+
+                if (['add_full_name', 'add_passport_number', 'edit_full_name', 'edit_passport_number'].includes(e.target.id)) {
+                    const duplicateInput = document.getElementById('add_confirm_duplicate');
+                    if (e.target.id.startsWith('add_') && duplicateInput) duplicateInput.value = '0';
+                    this.syncAutoDescription(e.target.id.startsWith('edit_') ? 'edit' : 'add');
                 }
             });
+
+            document.addEventListener('input', e => {
+                if (['add_full_name', 'add_passport_number', 'edit_full_name', 'edit_passport_number'].includes(e.target.id)) {
+                    const duplicateInput = document.getElementById('add_confirm_duplicate');
+                    if (e.target.id.startsWith('add_') && duplicateInput) duplicateInput.value = '0';
+                    this.syncAutoDescription(e.target.id.startsWith('edit_') ? 'edit' : 'add');
+                }
+                if (['add_description', 'edit_description'].includes(e.target.id)) {
+                    const desc = e.target;
+                    const lastAuto = desc.dataset.lastAutoDescription || '';
+                    desc.dataset.autoManaged = (desc.value.trim() === '' || desc.value.trim() === lastAuto.trim()) ? '1' : '0';
+                }
+            });
+        },
+
+        normalizeGenderValue(value) {
+            if (value === 'Male') return 'male';
+            if (value === 'Female') return 'female';
+            return '';
+        },
+
+        generateAutoDescription(prefix) {
+            const name = document.getElementById(`${prefix}_full_name`)?.value?.trim() || '';
+            const passport = document.getElementById(`${prefix}_passport_number`)?.value?.trim() || '';
+            if (!name && !passport) {
+                return '';
+            }
+
+            let text = `معاملة تأشيرة عمل للأخ ${name || '---'}`;
+            if (passport) {
+                text += ` - رقم الجواز ${passport}`;
+            }
+            return text;
+        },
+
+        syncAutoDescription(prefix, force = false) {
+            const desc = document.getElementById(`${prefix}_description`);
+            if (!desc) return;
+
+            const generated = this.generateAutoDescription(prefix);
+            const lastAuto = desc.dataset.lastAutoDescription || '';
+            const autoManaged = desc.dataset.autoManaged !== '0';
+            if (force || autoManaged || desc.value.trim() === '' || desc.value.trim() === lastAuto.trim()) {
+                desc.value = generated;
+                desc.dataset.lastAutoDescription = generated;
+                desc.dataset.autoManaged = '1';
+            }
+        },
+
+        syncPassportExpiryFromIssueDate(prefix, force = false) {
+            const issueInput = document.getElementById(`${prefix}_passport_issue`);
+            const expiryInput = document.getElementById(`${prefix}_passport_expiry`);
+            if (!issueInput || !expiryInput || !issueInput.value) {
+                return;
+            }
+
+            const issueDate = new Date(issueInput.value);
+            if (Number.isNaN(issueDate.getTime())) {
+                return;
+            }
+
+            const lastAuto = expiryInput.dataset.lastAutoValue || '';
+            const canAutoFill = force || expiryInput.value === '' || expiryInput.value === lastAuto;
+            if (!canAutoFill) {
+                return;
+            }
+
+            issueDate.setFullYear(issueDate.getFullYear() + 5);
+            const yyyy = issueDate.getFullYear();
+            const mm = String(issueDate.getMonth() + 1).padStart(2, '0');
+            const dd = String(issueDate.getDate()).padStart(2, '0');
+            const autoValue = `${yyyy}-${mm}-${dd}`;
+            expiryInput.value = autoValue;
+            expiryInput.dataset.lastAutoValue = autoValue;
+            expiryInput.dispatchEvent(new Event('change', { bubbles: true }));
+        },
+
+        async checkDuplicateBeforeSubmit() {
+            const duplicateInput = document.getElementById('add_confirm_duplicate');
+            if (duplicateInput && duplicateInput.value === '1') {
+                return true;
+            }
+
+            const passportNumber = document.getElementById('add_passport_number')?.value?.trim() || '';
+            const fullName = document.getElementById('add_full_name')?.value?.trim() || '';
+            if (!passportNumber && !fullName) {
+                return true;
+            }
+
+            try {
+                const params = new URLSearchParams({
+                    action: 'check_duplicate_work_visa',
+                    passport_number: passportNumber,
+                    full_name: fullName,
+                    transaction_type: 'work_visa',
+                    agent_id: document.getElementById('add_agent_id')?.value || '',
+                    branch_id: document.getElementById('add_branch_id')?.value || ''
+                });
+                const res = await fetch(`ajax_work_visa.php?${params.toString()}`);
+                const data = await res.json();
+                if (!data || data.status !== 'success' || !data.duplicate) {
+                    return true;
+                }
+
+                const reasons = [];
+                if (data.duplicate_by_passport) reasons.push('رقم الجواز مكرر');
+                if (data.duplicate_by_name) reasons.push('الشخص مسجل مسبقاً');
+                const examples = (data.matches || []).slice(0, 3).map(item => {
+                    const scope = item.agent_name || item.branch_name || '';
+                    return `- ${item.full_name || '---'} | ${item.passport_number || '---'}${scope ? ' | ' + scope : ''}`;
+                }).join('\n');
+
+                const examplesHtml = (data.matches || []).slice(0, 3).map(item => {
+                    const scope = item.agent_name || item.branch_name || '';
+                    return `<li class="mb-1">${this.escapeHtml(item.full_name || '---')} <span class="text-muted">|</span> ${this.escapeHtml(item.passport_number || '---')}${scope ? ` <span class="text-muted">|</span> ${this.escapeHtml(scope)}` : ''}</li>`;
+                }).join('');
+
+                const confirmed = await this.confirmDialog({
+                    title: reasons.join(' و ') || 'هذه البيانات مكررة',
+                    icon: 'warning',
+                    confirmText: 'نعم، أنشئ معاملة أخرى',
+                    cancelText: 'إلغاء',
+                    html: `
+                        <div class="text-end">
+                            ${data.scope_hint ? `<div class="small text-muted mb-2">${this.escapeHtml(data.scope_hint)}</div>` : ''}
+                            ${examplesHtml ? `<ul class="small text-end pe-3 mb-3">${examplesHtml}</ul>` : ''}
+                            <div class="fw-bold">هل تريد إنشاء فاتورة أو معاملة أخرى لنفس رقم الجواز أو نفس الشخص؟</div>
+                        </div>
+                    `
+                });
+                if (confirmed && duplicateInput) {
+                    duplicateInput.value = '1';
+                }
+                return confirmed;
+            } catch (err) {
+                console.error('Duplicate check failed:', err);
+                return true;
+            }
         },
 
         // 1.1 منطق العملات وسعر الصرف
@@ -1102,15 +2038,19 @@ $passports = $stmt->fetchAll();
                 const purBuy = parseFloat(purOpt?.dataset.buy) || 1;
                 const saleSell = parseFloat(saleOpt?.dataset.sell) || 1;
                 const rate = purBuy / saleSell;
+                const addPurSymbol = document.querySelector('.add-pur-symbol');
+                const addSaleSymbol = document.querySelector('.add-sale-symbol');
+                const exchangeRateInput = document.getElementById(prefix + '_invoice_exchange_rate');
 
                 document.querySelector('.' + prefix + '-pur-symbol')?.textContent.replace(purSymbol);
                 document.querySelector('.' + prefix + '-sale-symbol')?.textContent.replace(saleSymbol);
-                document.querySelector('.add-pur-symbol')?.textContent = purSymbol;
-                document.querySelector('.add-sale-symbol')?.textContent = saleSymbol;
-                document.getElementById(prefix + '_invoice_exchange_rate')?.value = rate.toFixed(6);
+                if (addPurSymbol) addPurSymbol.textContent = purSymbol;
+                if (addSaleSymbol) addSaleSymbol.textContent = saleSymbol;
+                if (exchangeRateInput) exchangeRateInput.value = rate.toFixed(6);
             } else {
                 exchangeContainer.style.display = 'none';
-                document.getElementById(prefix + '_invoice_exchange_rate')?.value = '1.000000';
+                const exchangeRateInput = document.getElementById(prefix + '_invoice_exchange_rate');
+                if (exchangeRateInput) exchangeRateInput.value = '1.000000';
             }
             this.calculateEquivalent(prefix);
             this.validateDiscount(prefix);
@@ -1233,13 +2173,28 @@ $passports = $stmt->fetchAll();
                 const data = await res.json();
 
                 if (data.status === 'success') {
-                    const saleInput = document.getElementById(prefix + '_sale_price');
-                    const purchaseInput = document.getElementById(prefix + '_purchase_price');
-                    const currencySelect = document.getElementById(prefix + '_currency_id');
+                    const saleInput = document.getElementById(prefix + '_total_amount');
+                    const purchaseInput = document.getElementById(prefix + '_cost_amount');
+                    const saleCurrencySelect = document.getElementById(prefix + '_sale_currency_id');
+                    const costCurrencySelect = document.getElementById(prefix + '_main_currency_id');
+                    const revenueInput = document.getElementById(prefix + '_service_revenue_account');
+                    const costAccountInput = document.getElementById(prefix + '_service_cost_account');
+                    const profitInput = document.getElementById(prefix + '_service_profit_account');
 
                     if (saleInput) saleInput.value = data.sale_price;
                     if (purchaseInput) purchaseInput.value = data.purchase_price;
-                    if (currencySelect) currencySelect.value = data.currency_id;
+                    if (saleCurrencySelect) saleCurrencySelect.value = data.currency_id;
+                    if (costCurrencySelect) costCurrencySelect.value = data.currency_id;
+                    if (revenueInput && data.revenue_account_name) revenueInput.value = data.revenue_account_name;
+                    if (costAccountInput && data.cost_account_name) costAccountInput.value = data.cost_account_name;
+                    if (profitInput && data.profit_account_name) profitInput.value = data.profit_account_name;
+
+                    [saleCurrencySelect, costCurrencySelect].forEach((el) => {
+                        if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                    [saleInput, purchaseInput].forEach((el) => {
+                        if (el) el.dispatchEvent(new Event('input', { bubbles: true }));
+                    });
                 }
             } catch (err) {
                 console.error('Error loading price:', err);
@@ -1252,55 +2207,46 @@ $passports = $stmt->fetchAll();
             const list = document.getElementById(`${prefix}_requirements_list`);
             const dobRule = document.getElementById(`${prefix}_dob_rule`);
             const expiryRule = document.getElementById(`${prefix}_passport_expiry_rule`);
+            const nationalityRule = document.getElementById(`${prefix}_nationality_rule`);
+            const genderRule = document.getElementById(`${prefix}_gender_rule`);
 
             if (!professionId) {
                 if (container) container.style.display = 'none';
                 if (list) list.innerHTML = '';
                 if (dobRule) dobRule.innerHTML = '';
                 if (expiryRule) expiryRule.innerHTML = '';
+                if (nationalityRule) nationalityRule.innerHTML = '';
+                if (genderRule) genderRule.innerHTML = '';
                 return;
             }
 
             try {
-                const res = await fetch(`ajax_work_visa.php?action=get_profession_requirements&profession_id=${professionId}`);
+                const selectedGender = this.normalizeGenderValue(document.getElementById(`${prefix}_gender`)?.value || '');
+                const res = await fetch(`ajax_work_visa.php?action=get_profession_requirements&profession_id=${professionId}&gender=${encodeURIComponent(selectedGender)}`);
                 const data = await res.json();
-
-                // 1. عرض المتطلبات
-                if (container && data.requirements && data.requirements.length > 0) {
-                    container.style.display = 'block';
-                    list.innerHTML = data.requirements.map(req => `
-                    <div class="form-check me-3">
-                        <input class="form-check-input" type="checkbox" name="requirements_check[]" value="${req.requirement_name}" id="req_${prefix}_${req.id}" checked>
-                        <label class="form-check-label small fw-bold" for="req_${prefix}_${req.id}">${req.requirement_name}</label>
-                    </div>
-                `).join('');
-                } else if (container) {
-                    container.style.display = 'none';
-                    list.innerHTML = '';
-                }
 
                 // 2. عرض القواعد وحفظها في الـ modal للتحقق اللاحق
                 const modal = document.getElementById(`${prefix}Modal`);
+                modal.dataset.requirements = JSON.stringify(data.requirements_all || data.requirements || []);
                 if (data.rules) {
                     modal.dataset.minAge = data.rules.min_age;
                     modal.dataset.maxAge = data.rules.max_age;
                     modal.dataset.minPassportValidity = data.rules.min_passport_validity_months;
+                    modal.dataset.allowedNationalities = JSON.stringify(data.rules.allowed_nationalities_list || []);
 
-                    if (dobRule) {
-                        dobRule.innerHTML = `<i class="fas fa-info-circle me-1"></i> العمر المسموح: ${data.rules.min_age} - ${data.rules.max_age} سنة`;
-                        dobRule.className = 'extra-small text-primary mt-1 fw-bold';
-                    }
-                    if (expiryRule) {
-                        expiryRule.innerHTML = `<i class="fas fa-info-circle me-1"></i> الصلاحية المطلوبة: ${data.rules.min_passport_validity_months} أشهر على الأقل`;
-                        expiryRule.className = 'extra-small text-primary mt-1 fw-bold';
-                    }
+                    if (dobRule) dobRule.innerHTML = '';
+                    if (expiryRule) expiryRule.innerHTML = '';
                 } else {
                     delete modal.dataset.minAge;
                     delete modal.dataset.maxAge;
                     delete modal.dataset.minPassportValidity;
+                    delete modal.dataset.allowedNationalities;
                     if (dobRule) dobRule.innerHTML = '';
                     if (expiryRule) expiryRule.innerHTML = '';
                 }
+
+                this.renderRequirements(prefix);
+                this.updateRuleAlerts(prefix);
 
                 // إعادة التحقق من الحقول الحالية إذا كانت ممتلئة
                 const dobInput = document.getElementById(`${prefix}_dob`);
@@ -1313,6 +2259,118 @@ $passports = $stmt->fetchAll();
             }
         },
 
+        renderRequirements(prefix) {
+            const container = document.getElementById(`${prefix}_requirements_container`);
+            const list = document.getElementById(`${prefix}_requirements_list`);
+            const modal = document.getElementById(`${prefix}Modal`);
+            if (!container || !list || !modal) return;
+
+            let requirements = [];
+            try {
+                requirements = JSON.parse(modal.dataset.requirements || '[]');
+            } catch (e) {
+                requirements = [];
+            }
+
+            const selectedGender = this.normalizeGenderValue(document.getElementById(`${prefix}_gender`)?.value || '');
+            const matched = requirements.filter(req => {
+                const reqGender = (req.gender || 'both').toLowerCase();
+                return reqGender === 'both' || (selectedGender && reqGender === selectedGender);
+            });
+
+            if (!matched.length) {
+                container.style.display = 'none';
+                list.innerHTML = '';
+                return;
+            }
+
+            container.style.display = 'block';
+            list.innerHTML = matched.map(req => {
+                const reqGender = (req.gender || 'both').toLowerCase();
+                const genderBadge = reqGender === 'male'
+                    ? '<span class="badge bg-primary-subtle text-primary border">للذكر</span>'
+                    : (reqGender === 'female'
+                        ? '<span class="badge bg-danger-subtle text-danger border">للأنثى</span>'
+                        : '<span class="badge bg-secondary-subtle text-secondary border">عام</span>');
+                return `<div class="d-inline-flex align-items-center gap-2 px-3 py-2 bg-white rounded-pill border shadow-sm"><span class="small fw-bold">${req.requirement_name}</span>${genderBadge}</div>`;
+            }).join('');
+        },
+
+        updateRuleAlerts(prefix) {
+            const modal = document.getElementById(`${prefix}Modal`);
+            if (!modal) return;
+
+            const alertsBox = document.getElementById(`${prefix}_rule_alerts`);
+            const nationalityRule = document.getElementById(`${prefix}_nationality_rule`);
+            const genderRule = document.getElementById(`${prefix}_gender_rule`);
+            const nationalityInput = document.getElementById(`${prefix}_nationality`);
+            const genderInput = document.getElementById(`${prefix}_gender`);
+            const messages = [];
+
+            let requirements = [];
+            let allowedNationalities = [];
+            try {
+                requirements = JSON.parse(modal.dataset.requirements || '[]');
+            } catch (e) {}
+            try {
+                allowedNationalities = JSON.parse(modal.dataset.allowedNationalities || '[]');
+            } catch (e) {}
+
+            const selectedGender = this.normalizeGenderValue(genderInput?.value || '');
+            const genderSpecificExists = requirements.some(req => ['male', 'female'].includes((req.gender || 'both').toLowerCase()));
+            const matchedGenderRequirements = requirements.filter(req => {
+                const reqGender = (req.gender || 'both').toLowerCase();
+                return reqGender !== 'both' && selectedGender && reqGender === selectedGender;
+            });
+
+            if (genderRule) {
+                if (!selectedGender && genderSpecificExists) {
+                    genderRule.innerHTML = `<i class="fas fa-circle-info me-1"></i> اختر الجنس لإظهار المتطلبات الخاصة.`;
+                    genderRule.className = 'extra-small text-warning mt-1 fw-bold';
+                    messages.push('اختر الجنس لإظهار المتطلبات الخاصة بالذكر أو الأنثى.');
+                } else if (selectedGender && matchedGenderRequirements.length > 0) {
+                    genderRule.innerHTML = `<i class="fas fa-list-check me-1"></i> ظهرت ${matchedGenderRequirements.length} متطلبات مرتبطة بالجنس المحدد.`;
+                    genderRule.className = 'extra-small text-primary mt-1 fw-bold';
+                } else {
+                    genderRule.innerHTML = '';
+                }
+            }
+
+            if (nationalityInput) nationalityInput.classList.remove('is-invalid');
+            if (allowedNationalities.length > 0) {
+                if (nationalityInput?.value) {
+                    const isAllowed = allowedNationalities.map(v => v.trim().toLowerCase()).includes(nationalityInput.value.trim().toLowerCase());
+                    if (nationalityRule) {
+                        nationalityRule.innerHTML = isAllowed
+                            ? `<i class="fas fa-check-circle me-1"></i> الجنسية مطابقة للقواعد.`
+                            : `<i class="fas fa-times-circle me-1"></i> الجنسية الحالية غير مسموح بها لهذه المهنة.`;
+                        nationalityRule.className = `extra-small mt-1 fw-bold ${isAllowed ? 'text-success' : 'text-danger'}`;
+                    }
+                    if (!isAllowed) {
+                        nationalityInput.classList.add('is-invalid');
+                        messages.push(`الجنسية الحالية غير مسموح بها. المسموح: ${allowedNationalities.join('، ')}`);
+                    }
+                } else if (nationalityRule) {
+                    nationalityRule.innerHTML = `<i class="fas fa-info-circle me-1"></i> الجنسيات المسموح بها: ${allowedNationalities.join('، ')}`;
+                    nationalityRule.className = 'extra-small text-primary mt-1 fw-bold';
+                }
+            } else if (nationalityRule) {
+                nationalityRule.innerHTML = '';
+            }
+
+            this.renderRequirements(prefix);
+
+            if (alertsBox) {
+                if (messages.length > 0) {
+                    alertsBox.classList.remove('d-none');
+                    alertsBox.innerHTML = messages.map(msg => `<div><i class="fas fa-exclamation-triangle me-1"></i>${msg}</div>`).join('');
+                } else {
+                    alertsBox.classList.add('d-none');
+                    alertsBox.innerHTML = '';
+                }
+            }
+        },
+
         // 1.2 التحقق من الحقل بناءً على القواعد
         validateField(input) {
             const modal = input.closest('.modal');
@@ -1321,7 +2379,11 @@ $passports = $stmt->fetchAll();
             if (!ruleType || !modal.dataset.minAge) return;
 
             const val = input.value;
-            if (!val) return;
+            if (!val) {
+                if (ruleDisplay) ruleDisplay.innerHTML = '';
+                input.classList.remove('is-invalid');
+                return;
+            }
 
             if (ruleType === 'age') {
                 const birthDate = new Date(val);
@@ -1338,8 +2400,7 @@ $passports = $stmt->fetchAll();
                     ruleDisplay.className = 'extra-small text-danger mt-1 fw-bold animate__animated animate__shakeX';
                     input.classList.add('is-invalid');
                 } else {
-                    ruleDisplay.innerHTML = `<i class="fas fa-check-circle me-1"></i> العمر مطابق (${age} سنة)`;
-                    ruleDisplay.className = 'extra-small text-success mt-1 fw-bold';
+                    ruleDisplay.innerHTML = '';
                     input.classList.remove('is-invalid');
                 }
             } else if (ruleType === 'passport_validity') {
@@ -1354,11 +2415,11 @@ $passports = $stmt->fetchAll();
                     ruleDisplay.className = 'extra-small text-danger mt-1 fw-bold animate__animated animate__shakeX';
                     input.classList.add('is-invalid');
                 } else {
-                    ruleDisplay.innerHTML = `<i class="fas fa-check-circle me-1"></i> الصلاحية كافية (${Math.floor(diffMonths)} شهر)`;
-                    ruleDisplay.className = 'extra-small text-success mt-1 fw-bold';
+                    ruleDisplay.innerHTML = '';
                     input.classList.remove('is-invalid');
                 }
             }
+            this.updateRuleAlerts(input.id.startsWith('edit_') ? 'edit' : 'add');
         },
 
         // تصفية الجدول ديناميكياً
@@ -1378,6 +2439,18 @@ $passports = $stmt->fetchAll();
 
         // 2. معالجة النقرات (Event Delegation)
         handleClicks(e) {
+            const menuToggleBtn = e.target.closest('[data-action-menu-toggle]');
+            if (menuToggleBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.toggleActionMenu(menuToggleBtn.dataset.actionMenuToggle);
+                return;
+            }
+
+            if (!e.target.closest('.financial-action-group')) {
+                this.closeActionMenus();
+            }
+
             // أزرار التفاصيل
             const viewBtn = e.target.closest('.view-details');
             if (viewBtn) {
@@ -1390,6 +2463,7 @@ $passports = $stmt->fetchAll();
             const editBtn = e.target.closest('.edit-visa');
             if (editBtn) {
                 e.preventDefault();
+                this.closeActionMenus();
                 this.openEditModal(editBtn.dataset.id);
                 return;
             }
@@ -1424,6 +2498,47 @@ $passports = $stmt->fetchAll();
                 e.preventDefault();
                 this.openConfirmDocsModal(confirmDocsBtn.dataset.id);
                 return;
+            }
+
+            const deleteRecordBtn = e.target.closest('.delete-passport-record');
+            if (deleteRecordBtn) {
+                e.preventDefault();
+                this.closeActionMenus();
+                this.deletePassportRecord(deleteRecordBtn.getAttribute('href'));
+                return;
+            }
+        },
+
+        toggleActionMenu(menuId) {
+            const target = document.getElementById(menuId);
+            if (!target) {
+                return;
+            }
+
+            const willShow = !target.classList.contains('show');
+            this.closeActionMenus();
+            if (willShow) {
+                target.classList.add('show');
+            }
+        },
+
+        closeActionMenus() {
+            document.querySelectorAll('.financial-action-menu.show').forEach(menu => {
+                menu.classList.remove('show');
+            });
+        },
+
+        async deletePassportRecord(url) {
+            const confirmed = await this.confirmDialog({
+                title: 'تأكيد حذف المعاملة',
+                text: 'سيتم حذف أصل المعاملة نفسها. هل تريد المتابعة؟',
+                icon: 'warning',
+                confirmText: 'نعم، احذف المعاملة',
+                cancelText: 'تراجع'
+            });
+
+            if (confirmed && url) {
+                window.location.href = url;
             }
         },
 
@@ -1534,16 +2649,31 @@ $passports = $stmt->fetchAll();
                     // إعادة تحميل المودال لتحديث الحالة
                     this.openConfirmDocsModal(passportId);
                 } else {
-                    alert(json.message);
+                    await this.alertDialog({
+                        title: json.status === 'success' ? 'تم التحديث' : 'تعذر التأكيد',
+                        text: json.message || 'تعذر تنفيذ العملية',
+                        icon: json.status === 'success' ? 'success' : 'error'
+                    });
                 }
             } catch (err) {
-                alert('حدث خطأ أثناء التأكيد');
+                await this.alertDialog({
+                    title: 'خطأ في التأكيد',
+                    text: 'حدث خطأ أثناء التأكيد',
+                    icon: 'error'
+                });
             }
         },
 
         // إنهاء التدقيق والانتقال للمرحلة التالية
         async finishVerification(id) {
-            if (!confirm('هل انتهيت من تدقيق كافة الوثائق وتريد الانتقال للمرحلة التالية؟')) return;
+            const confirmed = await this.confirmDialog({
+                title: 'إنهاء التدقيق',
+                text: 'هل انتهيت من تدقيق كافة الوثائق وتريد الانتقال للمرحلة التالية؟',
+                icon: 'question',
+                confirmText: 'نعم، متابعة',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
 
             try {
                 // جلب البيانات للتأكد من الانتقالات المتاحة
@@ -1568,14 +2698,26 @@ $passports = $stmt->fetchAll();
                         body: fdTrans
                     });
                     const jsonTrans = await resTrans.json();
-                    alert(jsonTrans.message);
+                    await this.alertDialog({
+                        title: jsonTrans.status === 'success' ? 'تم تحديث المرحلة' : 'تعذر الإنهاء',
+                        text: jsonTrans.message || 'تعذر تنفيذ العملية',
+                        icon: jsonTrans.status === 'success' ? 'success' : 'error'
+                    });
                     location.reload();
                 } else {
-                    alert('تم تحديث قائمة الوثائق بنجاح. لا توجد مرحلة انتقالية مبرمجة حالياً.');
+                    await this.alertDialog({
+                        title: 'تم حفظ التدقيق',
+                        text: 'تم تحديث قائمة الوثائق بنجاح. لا توجد مرحلة انتقالية مبرمجة حالياً.',
+                        icon: 'success'
+                    });
                     location.reload();
                 }
             } catch (err) {
-                alert('حدث خطأ أثناء الإنهاء');
+                await this.alertDialog({
+                    title: 'خطأ في الإنهاء',
+                    text: 'حدث خطأ أثناء الإنهاء',
+                    icon: 'error'
+                });
             }
         },
 
@@ -1698,31 +2840,28 @@ $passports = $stmt->fetchAll();
                                             'letter_image': 'خطاب التنازل',
                                             'print_image': 'برنت الجوازات'
                                         };
-                                        return ` <
-                div class = "col-md-2" >
-                <
-                div class = "card border rounded-4 p-2 text-center bg-white h-100 shadow-sm" >
-                <
-                img src = "../assets/uploads/${data[key]}"
-            class = "img-fluid rounded-3 mb-2 shadow-sm"
-            style = "max-height: 100px; min-height: 100px; object-fit: contain; background: #f8f9fa;" >
-                <
-                div class = "fw-bold extra-small text-dark mb-2" > $ {
-                    labels[key] || 'عرض الملف'
-                } < /div> <
-                div class = "d-flex gap-1 mt-auto" >
-                <
-                a href = "../assets/uploads/${data[key]}"
-            target = "_blank"
-            class = "btn btn-xs btn-light border flex-grow-1 extra-small rounded-pill p-1" > < i class = "fas fa-eye" > < /i></a >
-            <
-            a href = "../assets/uploads/${data[key]}"
-            download class = "btn btn-xs btn-primary flex-grow-1 extra-small rounded-pill p-1" > < i class = "fas fa-download" > < /i></a >
-            <
-            /div> <
-            /div> <
-            /div>
-            `;
+                                        return `
+                                            <div class="col-md-2">
+                                                <div class="card border rounded-4 p-2 text-center bg-white h-100 shadow-sm">
+                                                    <img src="../assets/uploads/${data[key]}"
+                                                         class="img-fluid rounded-3 mb-2 shadow-sm"
+                                                         style="max-height: 100px; min-height: 100px; object-fit: contain; background: #f8f9fa;">
+                                                    <div class="fw-bold extra-small text-dark mb-2">${labels[key] || 'عرض الملف'}</div>
+                                                    <div class="d-flex gap-1 mt-auto">
+                                                        <a href="../assets/uploads/${data[key]}"
+                                                           target="_blank"
+                                                           class="btn btn-xs btn-light border flex-grow-1 extra-small rounded-pill p-1">
+                                                            <i class="fas fa-eye"></i>
+                                                        </a>
+                                                        <a href="../assets/uploads/${data[key]}"
+                                                           download
+                                                           class="btn btn-xs btn-primary flex-grow-1 extra-small rounded-pill p-1">
+                                                            <i class="fas fa-download"></i>
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
                                     }).join('')}
                                 </div>
                             </div>
@@ -1898,107 +3037,87 @@ $passports = $stmt->fetchAll();
                 ${data.paid_amount !== undefined ? `
                 <div class="tab-pane fade" id="financial" role="tabpanel">
                     <div class="row g-4">
-                        <div class="col-12">
-                            <div class="row g-3">
-                                <div class="col-md-7">
-                                    <div class="card border-0 shadow-sm rounded-4 h-100">
-                                        <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
-                                            <h6 class="fw-bold mb-0"><i class="fas fa-wallet me-2 text-success"></i> ملخص الحساب</h6>
-                                            <span class="badge ${data.payment_status === 'posted' ? 'bg-primary' : (data.payment_status === 'fully_paid' ? 'bg-success' : 'bg-warning')} rounded-pill px-3">
-                                                ${this.getPaymentStatusLabel(data.payment_status)}
-                                            </span>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 h-100">
+                                <div class="card-header bg-white border-0 py-3">
+                                    <h6 class="fw-bold mb-0"><i class="fas fa-book me-2 text-primary"></i> حسابات الخدمة</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="list-group list-group-flush small">
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <span class="text-muted">حساب الإيرادات</span>
+                                            <span class="fw-bold text-success text-end">${data.service_accounts?.revenue_account_name || 'غير محدد'}</span>
                                         </div>
-                                        <div class="card-body">
-                                            <div class="row g-3">
-                                                <div class="col-6">
-                                                    <div class="p-3 bg-light rounded-3 border-start border-primary border-4">
-                                                        <div class="small text-muted mb-1">إجمالي المعاملة</div>
-                                                        <div class="h5 fw-bold mb-0">${Number(data.agent_price || data.branch_price || data.sale_price).toLocaleString()} <small class="extra-small">${data.currency_symbol || ''}</small></div>
-                                                    </div>
-                                                </div>
-                                                <div class="col-6">
-                                                    <div class="p-3 bg-light rounded-3 border-start border-success border-4">
-                                                        <div class="small text-muted mb-1">المبلغ المسدد</div>
-                                                        <div class="h5 fw-bold mb-0">${Number(data.paid_amount).toLocaleString()} <small class="extra-small">${data.currency_symbol || ''}</small></div>
-                                                    </div>
-                                                </div>
-                                                <div class="col-12">
-                                                    <div class="p-3 ${data.agent_price - data.paid_amount > 0 ? 'bg-danger-subtle text-danger' : 'bg-success-subtle text-success'} rounded-3 border">
-                                                        <div class="d-flex justify-content-between align-items-center">
-                                                            <span class="fw-bold">المبلغ المتبقي</span>
-                                                            <span class="h4 fw-bold mb-0">${Math.max(0, (data.agent_price || data.branch_price || data.sale_price) - data.paid_amount).toLocaleString()} <small class="extra-small">${data.currency_symbol || ''}</small></span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <hr class="my-4">
-
-                                            <div class="list-group list-group-flush small">
-                                                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                                                    <span class="text-muted">الحساب المالي المرتبط:</span>
-                                                    <span class="fw-bold">${data.linked_account ? data.linked_account.account_name : 'غير مرتبط'}</span>
-                                                </div>
-                                                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                                                    <span class="text-muted">حالة الاعتماد المالي:</span>
-                                                    <span>
-                                                        ${data.is_financial_approved == 1
-                                                            ? `<span class="text-success fw-bold"><i class="fas fa-check-circle me-1"></i> معتمد</span>`
-                                                            : `<span class="text-muted">بانتظار الاعتماد</span>`}
-                                                    </span>
-                                                </div>
-                                                <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                                                    <span class="text-muted">حالة الترحيل المالي:</span>
-                                                    <span>
-                                                        ${data.is_posted == 1
-                                                            ? `<span class="text-primary fw-bold"><i class="fas fa-file-export me-1"></i> تم الترحيل</span>`
-                                                            : `<span class="text-muted">غير مرحل</span>`}
-                                                    </span>
-                                                </div>
-                                            </div>
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <span class="text-muted">حساب التكلفة</span>
+                                            <span class="fw-bold text-danger text-end">${data.service_accounts?.cost_account_name || 'غير محدد'}</span>
+                                        </div>
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <span class="text-muted">حساب الأرباح</span>
+                                            <span class="fw-bold text-warning text-end">${data.service_accounts?.profit_account_name || 'غير محدد'}</span>
+                                        </div>
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <span class="text-muted">آخر سند قبض</span>
+                                            <span class="fw-bold text-end">${data.last_payment ? '#' + data.last_payment.receipt_number : 'لا يوجد'}</span>
+                                        </div>
+                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                            <span class="text-muted">المبلغ المقبوض</span>
+                                            <span class="fw-bold text-success">${Number(data.paid_amount || 0).toLocaleString()} ${data.currency_symbol || ''}</span>
                                         </div>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
 
-                                <div class="col-md-5">
-                                    <div class="card border-0 shadow-sm rounded-4 h-100">
-                                        <div class="card-header bg-white border-0 py-3">
-                                            <h6 class="fw-bold mb-0"><i class="fas fa-history me-2 text-info"></i> آخر الحركات</h6>
-                                        </div>
-                                        <div class="card-body p-0">
-                                            ${data.last_payment ? `
-                                            <div class="p-3 border-bottom">
-                                                <div class="d-flex justify-content-between align-items-start mb-2">
-                                                    <span class="badge bg-success">سند قبض</span>
-                                                    <span class="small text-muted">${data.last_payment.date}</span>
-                                                </div>
-                                                <div class="fw-bold text-dark">#${data.last_payment.receipt_number}</div>
-                                                <div class="text-success h5 fw-bold mb-0 mt-1">${Number(data.last_payment.amount).toLocaleString()}</div>
-                                            </div>
-                                            ` : '<div class="p-4 text-center text-muted">لا يوجد حركات مالية مسجلة</div>'}
-
-                                            <div class="p-3 mt-auto">
-                                                <div class="d-grid gap-2">
-                                                    <?php if (has_permission('work_visa_accounts_approve')): ?>
-                                                    ${data.is_financial_approved == 0 ? `
-                                                        <button class="btn btn-success rounded-pill" onclick="WorkVisa.approveFinance(${data.id})">
-                                                            <i class="fas fa-check-double me-2"></i> اعتماد الحسابات
-                                                        </button>
-                                                    ` : ''}
-                                                    <?php endif; ?>
-
-                                                    <?php if (has_permission('work_visa_financial_post')): ?>
-                                                    ${data.is_posted == 0 ? `
-                                                        <button class="btn btn-primary rounded-pill" onclick="WorkVisa.postFinance(${data.id})">
-                                                            <i class="fas fa-file-export me-2"></i> ترحيل مالي
-                                                        </button>
-                                                    ` : ''}
-                                                    <?php endif; ?>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 h-100">
+                                <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+                                    <h6 class="fw-bold mb-0"><i class="fas fa-file-invoice-dollar me-2 text-success"></i> فاتورة البيع</h6>
+                                    ${data.sales_invoice ? `<span class="badge bg-light text-dark border">${data.sales_invoice.invoice_number}</span>` : ''}
                                 </div>
+                                <div class="card-body">
+                                    ${data.sales_invoice ? `
+                                        <div class="d-flex flex-wrap gap-2 mb-3">
+                                            <span class="badge bg-success-subtle text-success border">${this.getInvoicePaymentStatusLabel(data.sales_invoice.payment_status)}</span>
+                                            <span class="badge ${data.sales_invoice.invoice_status === 'posted' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary'} border">${this.getInvoiceStatusLabel(data.sales_invoice.invoice_status)}</span>
+                                            <span class="badge bg-warning-subtle text-warning border">${this.getDeliveryTypeLabel(data.sales_invoice.delivery_type)}</span>
+                                        </div>
+                                        <div class="list-group list-group-flush small">
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">الحساب</span><span class="fw-bold text-end">${data.sales_invoice.account_display || '---'}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">العميل / الوكيل</span><span class="fw-bold text-end">${data.sales_invoice.counterparty_name || '---'}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">المبلغ</span><span class="fw-bold">${Number(data.sales_invoice.total_amount || 0).toLocaleString()} ${data.sales_invoice.currency_symbol || ''}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">المسدد</span><span class="fw-bold">${Number(data.sales_invoice.amount_received || 0).toLocaleString()} ${data.sales_invoice.currency_symbol || ''}</span></div>
+                                        </div>
+                                        <a class="btn btn-outline-success rounded-pill w-100 mt-3" href="invoice_details.php?id=${data.sales_invoice.id}" target="_blank">فتح الفاتورة</a>
+                                    ` : '<div class="text-center text-muted py-4">لا توجد فاتورة بيع مرتبطة</div>'}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 h-100">
+                                <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+                                    <h6 class="fw-bold mb-0"><i class="fas fa-file-invoice me-2 text-danger"></i> فاتورة الشراء</h6>
+                                    ${data.purchase_invoice ? `<span class="badge bg-light text-dark border">${data.purchase_invoice.invoice_number}</span>` : ''}
+                                </div>
+                                <div class="card-body">
+                                    ${data.purchase_invoice ? `
+                                        <div class="d-flex flex-wrap gap-2 mb-3">
+                                            <span class="badge bg-success-subtle text-success border">${this.getInvoicePaymentStatusLabel(data.purchase_invoice.payment_status)}</span>
+                                            <span class="badge ${data.purchase_invoice.invoice_status === 'posted' ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary'} border">${this.getInvoiceStatusLabel(data.purchase_invoice.invoice_status)}</span>
+                                            <span class="badge bg-warning-subtle text-warning border">${this.getDeliveryTypeLabel(data.purchase_invoice.delivery_type)}</span>
+                                        </div>
+                                        <div class="list-group list-group-flush small">
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">المورد</span><span class="fw-bold text-end">${data.purchase_invoice.counterparty_name || '---'}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">الحساب</span><span class="fw-bold text-end">${data.purchase_invoice.account_display || '---'}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">المبلغ</span><span class="fw-bold">${Number(data.purchase_invoice.total_amount || 0).toLocaleString()} ${data.purchase_invoice.currency_symbol || ''}</span></div>
+                                            <div class="list-group-item d-flex justify-content-between align-items-center px-0"><span class="text-muted">المسدد</span><span class="fw-bold">${Number(data.purchase_invoice.amount_received || 0).toLocaleString()} ${data.purchase_invoice.currency_symbol || ''}</span></div>
+                                        </div>
+                                        <a class="btn btn-outline-danger rounded-pill w-100 mt-3" href="invoice_details.php?id=${data.purchase_invoice.id}" target="_blank">فتح الفاتورة</a>
+                                    ` : '<div class="text-center text-muted py-4">لا توجد فاتورة شراء مرتبطة</div>'}
+                                </div>
+                            </div>
+                        </div>
                             </div>
                         </div>
                     </div>
@@ -2012,6 +3131,7 @@ $passports = $stmt->fetchAll();
         getPaymentStatusLabel(status) {
             const labels = {
                 'unpaid': 'غير مدفوع',
+                'partial': 'مدفوع جزئياً',
                 'partially_paid': 'مدفوع جزئياً',
                 'fully_paid': 'مدفوع بالكامل',
                 'awaiting_approval': 'بانتظار الاعتماد',
@@ -2020,9 +3140,41 @@ $passports = $stmt->fetchAll();
             return labels[status] || status;
         },
 
+        getInvoicePaymentStatusLabel(status) {
+            return this.getPaymentStatusLabel(status);
+        },
+
+        getInvoiceStatusLabel(status) {
+            const labels = {
+                'draft': 'غير مرحل',
+                'posted': 'مرحل',
+                'cancelled': 'ملغي'
+            };
+            return labels[status] || status;
+        },
+
+        getDeliveryTypeLabel(type) {
+            const labels = {
+                'cash': 'صندوق',
+                'credit': 'آجل',
+                'bank_transfer': 'بنك',
+                'agent': 'وكيل',
+                'branch': 'فرع',
+                'draft': 'مسودة'
+            };
+            return labels[type] || type;
+        },
+
         // اعتماد مالي
         async approveFinance(id) {
-            if (!confirm('هل أنت متأكد من اعتماد الحسابات لهذه المعاملة؟')) return;
+            const confirmed = await this.confirmDialog({
+                title: 'اعتماد الحسابات',
+                text: 'هل أنت متأكد من اعتماد الحسابات لهذه المعاملة؟',
+                icon: 'question',
+                confirmText: 'نعم، اعتماد',
+                cancelText: 'إلغاء'
+            });
+            if (!confirmed) return;
 
             try {
                 const formData = new FormData();
@@ -2035,19 +3187,42 @@ $passports = $stmt->fetchAll();
                 const result = await res.json();
 
                 if (result.status === 'success') {
-                    alert(result.message);
+                    await this.alertDialog({
+                        title: 'تم الاعتماد',
+                        text: result.message || 'تم اعتماد الحسابات بنجاح',
+                        icon: 'success'
+                    });
                     this.openDetailsModal(id); // تحديث العرض
                 } else {
-                    alert(result.message);
+                    await this.alertDialog({
+                        title: 'تعذر الاعتماد',
+                        text: result.message || 'تعذر اعتماد الحسابات',
+                        icon: 'error'
+                    });
                 }
             } catch (err) {
-                alert('حدث خطأ أثناء المعالجة');
+                await this.alertDialog({
+                    title: 'خطأ في المعالجة',
+                    text: 'حدث خطأ أثناء المعالجة',
+                    icon: 'error'
+                });
             }
         },
 
         // انتقال يدوي للمرحلة (للأدمن)
         async manualTransition(passportId, toStepId, stepName) {
-            if (!confirm(`هل أنت متأكد من تغيير مرحلة المعاملة يدوياً إلى: ${stepName}؟\nسيتم تجاوز القواعد المعتادة لسير العمل.`)) return;
+            const confirmed = await this.confirmDialog({
+                title: 'تغيير يدوي للمرحلة',
+                html: `<div class="text-end">
+                    <div class="mb-2">هل أنت متأكد من تغيير مرحلة المعاملة يدويًا إلى:</div>
+                    <div class="fw-bold text-primary mb-2">${this.escapeHtml(stepName)}</div>
+                    <div class="small text-muted">سيتم تجاوز القواعد المعتادة لسير العمل.</div>
+                </div>`,
+                icon: 'warning',
+                confirmText: 'نعم، غيّر المرحلة',
+                cancelText: 'إلغاء'
+            });
+            if (!confirmed) return;
 
             try {
                 const formData = new FormData();
@@ -2062,24 +3237,47 @@ $passports = $stmt->fetchAll();
                 const result = await res.json();
 
                 if (result.status === 'success') {
-                    alert(result.message);
+                    await this.alertDialog({
+                        title: 'تم تغيير المرحلة',
+                        text: result.message || 'تم تحديث المرحلة بنجاح',
+                        icon: 'success'
+                    });
                     this.openDetailsModal(passportId); // تحديث العرض
                 } else {
-                    alert(result.message);
+                    await this.alertDialog({
+                        title: 'تعذر تغيير المرحلة',
+                        text: result.message || 'تعذر تنفيذ العملية',
+                        icon: 'error'
+                    });
                 }
             } catch (err) {
                 console.error('Manual transition error:', err);
-                alert('حدث خطأ أثناء محاولة تغيير المرحلة');
+                await this.alertDialog({
+                    title: 'خطأ في تغيير المرحلة',
+                    text: 'حدث خطأ أثناء محاولة تغيير المرحلة',
+                    icon: 'error'
+                });
             }
         },
 
         // ترحيل مالي
-        async postFinance(id) {
-            if (!confirm('هل أنت متأكد من الترحيل المالي لهذه المعاملة؟ سيتم تقييد المبلغ على حساب الوكيل/الفرع.')) return;
+        async postFinance(id, scope = 'all') {
+            const scopeLabel = scope === 'sales' ? 'فاتورة البيع فقط' : (scope === 'purchase' ? 'فاتورة الشراء فقط' : 'كل الفواتير');
+            const confirmed = await this.confirmDialog({
+                title: 'تأكيد الترحيل',
+                text: `هل أنت متأكد من ترحيل ${scopeLabel} لهذه المعاملة؟ سيتم تحديث القيود المحاسبية بحسب الاختيار.`,
+                icon: 'question',
+                confirmText: 'نعم، ترحيل',
+                cancelText: 'إلغاء'
+            });
+            if (!confirmed) return;
 
             try {
+                this.closeActionMenus();
                 const formData = new FormData();
                 formData.append('id', id);
+                formData.append('scope', scope);
+                formData.append('csrf_token', CSRF_TOKEN);
 
                 const res = await fetch('ajax_work_visa.php?action=post_finance', {
                     method: 'POST',
@@ -2088,13 +3286,89 @@ $passports = $stmt->fetchAll();
                 const result = await res.json();
 
                 if (result.status === 'success') {
-                    alert(result.message);
-                    this.openDetailsModal(id); // تحديث العرض
+                    this.showNotice(result.message, 'success');
+                    window.location.reload();
                 } else {
-                    alert(result.message);
+                    this.showNotice(result.message || 'تعذر تنفيذ الترحيل المطلوب', 'error');
                 }
             } catch (err) {
-                alert('حدث خطأ أثناء المعالجة');
+                this.showNotice('حدث خطأ أثناء تنفيذ الترحيل المالي', 'error');
+            }
+        },
+
+        async unpostFinance(id, scope = 'all') {
+            const scopeLabel = scope === 'sales' ? 'فاتورة البيع فقط' : (scope === 'purchase' ? 'فاتورة الشراء فقط' : 'كل الفواتير');
+            const confirmed = await this.confirmDialog({
+                title: 'إلغاء الترحيل',
+                text: `هل أنت متأكد من إلغاء ترحيل ${scopeLabel} لهذه المعاملة؟ ستعود الفواتير المحددة إلى حالة المسودة.`,
+                icon: 'warning',
+                confirmText: 'نعم، إلغاء الترحيل',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
+
+            try {
+                this.closeActionMenus();
+                const formData = new FormData();
+                formData.append('id', id);
+                formData.append('scope', scope);
+                formData.append('csrf_token', CSRF_TOKEN);
+
+                const res = await fetch('ajax_work_visa.php?action=unpost_finance', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await res.json();
+
+                if (result.status === 'success') {
+                    this.showNotice(result.message, 'success');
+                    window.location.reload();
+                } else {
+                    this.showNotice(result.message || 'تعذر إلغاء الترحيل', 'error');
+                }
+            } catch (err) {
+                this.showNotice('حدث خطأ أثناء إلغاء الترحيل المالي', 'error');
+            }
+        },
+
+        async deleteFinance(id, scope = 'all') {
+            const scopeLabel = scope === 'sales'
+                ? 'فاتورة البيع فقط'
+                : (scope === 'purchase' ? 'فاتورة الشراء فقط' : 'فاتورتي البيع والشراء');
+            const confirmMessage = scope === 'all'
+                ? `هل أنت متأكد من حذف ${scopeLabel} من هذه المعاملة؟\n\nلن يتم حذف أصل معاملة فيز العمل، وسيتم حذف الربط المالي فقط.`
+                : `هل أنت متأكد من حذف ${scopeLabel} من هذه المعاملة؟`;
+
+            const confirmed = await this.confirmDialog({
+                title: 'تأكيد الحذف المالي',
+                text: confirmMessage,
+                icon: 'warning',
+                confirmText: 'نعم، احذف',
+                cancelText: 'إلغاء'
+            });
+            if (!confirmed) return;
+
+            try {
+                this.closeActionMenus();
+                const formData = new FormData();
+                formData.append('id', id);
+                formData.append('scope', scope);
+                formData.append('csrf_token', CSRF_TOKEN);
+
+                const res = await fetch('ajax_work_visa.php?action=delete_finance', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await res.json();
+
+                if (result.status === 'success') {
+                    this.showNotice(result.message, 'success');
+                    window.location.reload();
+                } else {
+                    this.showNotice(result.message || 'تعذر حذف الفاتورة المطلوبة', 'error');
+                }
+            } catch (err) {
+                this.showNotice('حدث خطأ أثناء حذف الفاتورة المطلوبة', 'error');
             }
         },
 
@@ -2115,20 +3389,69 @@ $passports = $stmt->fetchAll();
                         'edit_passport_number': data.passport_number,
                         'edit_agent_id': data.agent_id || '',
                         'edit_branch_id': data.branch_id || '',
+                        'edit_customer_id_hidden': data.sales_invoice?.customer_id || '',
+                        'edit_agent_id_hidden': data.sales_invoice?.agent_id || data.agent_id || '',
                         'edit_profession_id': data.profession_id || '',
                         'edit_status_id': data.status_id,
                         'edit_dob': data.date_of_birth || '',
                         'edit_passport_issue': data.passport_issue_date || '',
                         'edit_passport_expiry': data.passport_expiry_date || '',
-                        'edit_sale_price': data.sale_price || 0,
-                        'edit_purchase_price': data.purchase_price || data.agent_price || data.branch_price || 0,
-                        'edit_currency_id': data.currency_id || ''
+                        'edit_batch_id': data.batch_id || '',
+                        'edit_invoice_date': (data.sales_invoice?.invoice_date || data.purchase_invoice?.invoice_date || '').replace(' ', 'T').slice(0, 16),
+                        'edit_delivery_type': data.sales_invoice?.delivery_type || <?php echo json_encode($settings['default_delivery_type'] ?? 'draft'); ?>,
+                        'edit_sale_currency_id': data.sales_invoice?.currency_id || '1',
+                        'edit_total_amount': data.sales_invoice?.total_amount || '0',
+                        'edit_received_amount': data.sales_invoice?.amount_received || '0',
+                        'edit_record_purchase': data.purchase_invoice ? '1' : '0',
+                        'edit_main_currency_id': data.purchase_invoice?.currency_id || data.sales_invoice?.currency_id || '1',
+                        'edit_cost_amount': data.purchase_invoice?.total_amount || '0',
+                        'edit_description': data.sales_invoice?.description || data.description || ''
                     };
 
                     for (let fid in fields) {
                         const el = document.getElementById(fid);
                         if (el) el.value = fields[fid];
                     }
+
+                    const serviceRevenue = document.getElementById('edit_service_revenue_account');
+                    const serviceCost = document.getElementById('edit_service_cost_account');
+                    const serviceProfit = document.getElementById('edit_service_profit_account');
+                    if (serviceRevenue) serviceRevenue.value = data.service_accounts?.revenue_account_name || '';
+                    if (serviceCost) serviceCost.value = data.service_accounts?.cost_account_name || '';
+                    if (serviceProfit) serviceProfit.value = data.service_accounts?.profit_account_name || '';
+
+                    const deliveryType = document.getElementById('edit_delivery_type');
+                    if (deliveryType) {
+                        deliveryType.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
+                    setTimeout(() => {
+                        const accountSelect = document.getElementById('edit_account_select');
+                        const supplierSelect = document.getElementById('edit_supplier_id');
+
+                        if (accountSelect && data.sales_invoice?.account_id) {
+                            const optionText = data.sales_invoice.account_display || data.sales_invoice.counterparty_name || '-- اختر --';
+                            if (![...accountSelect.options].some(opt => String(opt.value) === String(data.sales_invoice.account_id))) {
+                                accountSelect.append(new Option(optionText, data.sales_invoice.account_id, true, true));
+                            }
+                            accountSelect.value = String(data.sales_invoice.account_id);
+                            accountSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+
+                        if (supplierSelect && data.purchase_invoice?.supplier_id) {
+                            supplierSelect.value = String(data.purchase_invoice.supplier_id);
+                            supplierSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }, 350);
+
+                    ['edit_sale_currency_id', 'edit_main_currency_id', 'edit_total_amount', 'edit_cost_amount', 'edit_received_amount', 'edit_record_purchase'].forEach((fid) => {
+                        const el = document.getElementById(fid);
+                        if (el) {
+                            el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
+                        }
+                    });
+
+                    this.syncAutoDescription('edit', true);
 
                     // تحميل المتطلبات إذا كانت المهنة موجودة
                     if (data.profession_id) {
@@ -2141,7 +3464,11 @@ $passports = $stmt->fetchAll();
                     bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
                 }
             } catch (err) {
-                alert('فشل جلب بيانات التعديل');
+                await this.alertDialog({
+                    title: 'تعذر فتح التعديل',
+                    text: 'فشل جلب بيانات التعديل',
+                    icon: 'error'
+                });
             }
         },
 
@@ -2232,7 +3559,14 @@ $passports = $stmt->fetchAll();
 
         // 6. تنفيذ الانتقال
         async processTransition(passportId, toStepId) {
-            if (!confirm('هل أنت متأكد من نقل المعاملة لهذه المرحلة؟')) return;
+            const confirmed = await this.confirmDialog({
+                title: 'تأكيد نقل المرحلة',
+                text: 'هل أنت متأكد من نقل المعاملة لهذه المرحلة؟',
+                icon: 'question',
+                confirmText: 'نعم، تنفيذ النقل',
+                cancelText: 'تراجع'
+            });
+            if (!confirmed) return;
 
             const notes = document.getElementById('transition_notes') ? document.getElementById('transition_notes').value : '';
             const members = Array.from(document.querySelectorAll('.member-check:checked')).map(el => el.value);
@@ -2273,13 +3607,25 @@ $passports = $stmt->fetchAll();
                 const json = await res.json();
 
                 if (json.status === 'success') {
-                    alert(json.message);
+                    await this.alertDialog({
+                        title: 'تم تنفيذ النقل',
+                        text: json.message || 'تم نقل المعاملة بنجاح',
+                        icon: 'success'
+                    });
                     location.reload();
                 } else {
-                    alert('خطأ: ' + json.message);
+                    await this.alertDialog({
+                        title: 'تعذر النقل',
+                        text: json.message ? `خطأ: ${json.message}` : 'تعذر نقل المعاملة',
+                        icon: 'error'
+                    });
                 }
             } catch (err) {
-                alert('فشل الاتصال بالخادم');
+                await this.alertDialog({
+                    title: 'خطأ في الاتصال',
+                    text: 'فشل الاتصال بالخادم',
+                    icon: 'error'
+                });
             }
         },
 
@@ -2312,25 +3658,40 @@ $passports = $stmt->fetchAll();
                 const json = await res.json();
 
                 if (json.status === 'success') {
-                    alert('تم حفظ التغييرات بنجاح');
+                    await this.alertDialog({
+                        title: 'تم الحفظ',
+                        text: 'تم حفظ التغييرات بنجاح',
+                        icon: 'success'
+                    });
                     bootstrap.Modal.getInstance(document.getElementById('detailsModal')).hide();
                     location.reload();
                 } else {
-                    alert('خطأ: ' + json.message);
+                    await this.alertDialog({
+                        title: 'تعذر الحفظ',
+                        text: json.message ? `خطأ: ${json.message}` : 'تعذر حفظ التغييرات',
+                        icon: 'error'
+                    });
                 }
             } catch (err) {
-                alert('فشل الحفظ');
+                await this.alertDialog({
+                    title: 'خطأ في الحفظ',
+                    text: 'فشل الحفظ',
+                    icon: 'error'
+                });
             }
         },
 
         // 8. OCR محلي باستخدام Tesseract.js للتركيز الحصري على بصمة الجواز (MRZ)
         async processPassportOCR(prefix) {
             const fileInput = document.getElementById(prefix === 'add' ? 'add_passport_image_input' : 'edit_passport_image_input');
+            const isDark = document.body.classList.contains('theme-dark');
             if (!fileInput.files || !fileInput.files[0]) {
                 Swal.fire({
                     title: 'تنبيه',
                     text: 'يرجى اختيار صورة الجواز أولاً',
-                    icon: 'warning'
+                    icon: 'warning',
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a'
                 });
                 return;
             }
@@ -2346,6 +3707,8 @@ $passports = $stmt->fetchAll();
                    <div class="progress mt-2"><div id="ocr-progress" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div></div>`,
                 allowOutsideClick: false,
                 showConfirmButton: false,
+                background: isDark ? '#0b1220' : '#ffffff',
+                color: isDark ? '#e2e8f0' : '#0f172a',
                 didOpen: () => Swal.showLoading()
             });
 
@@ -2401,13 +3764,17 @@ $passports = $stmt->fetchAll();
                     Swal.fire({
                         title: 'تمت القراءة',
                         text: 'تم استخراج البيانات بنجاح من بصمة الجواز (MRZ)',
-                        icon: 'success'
+                        icon: 'success',
+                        background: isDark ? '#0b1220' : '#ffffff',
+                        color: isDark ? '#e2e8f0' : '#0f172a'
                     });
                 } else {
                     Swal.fire({
                         title: 'تنبيه',
                         text: 'لم يتم العثور على بصمة MRZ صالحة. تأكد من جودة الصورة.',
-                        icon: 'warning'
+                        icon: 'warning',
+                        background: isDark ? '#0b1220' : '#ffffff',
+                        color: isDark ? '#e2e8f0' : '#0f172a'
                     });
                 }
             } catch (err) {
@@ -2415,7 +3782,9 @@ $passports = $stmt->fetchAll();
                 Swal.fire({
                     title: 'خطأ',
                     text: 'حدث خطأ غير متوقع أثناء المعالجة.',
-                    icon: 'error'
+                    icon: 'error',
+                    background: isDark ? '#0b1220' : '#ffffff',
+                    color: isDark ? '#e2e8f0' : '#0f172a'
                 });
             } finally {
                 btn.innerHTML = oldText;

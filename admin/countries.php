@@ -7,8 +7,15 @@ if (!has_permission('settings_edit')) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات المباشرة عبر الرابط. استخدم أزرار الصفحة المحمية فقط.";
+}
+
 // معالجة الإضافة
 if (isset($_POST['add_country'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='countries.php';</script>");
+    }
     try {
         // التحقق من التكرار
         $check = $pdo->prepare("SELECT id FROM countries WHERE country_name = ? OR country_code = ?");
@@ -27,6 +34,9 @@ if (isset($_POST['add_country'])) {
 
 // معالجة التعديل
 if (isset($_POST['edit_country'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='countries.php';</script>");
+    }
     try {
         $stmt = $pdo->prepare("UPDATE countries SET country_name = ?, country_code = ?, dial_code = ? WHERE id = ?");
         $stmt->execute([$_POST['country_name'], $_POST['country_code'], $_POST['dial_code'], $_POST['id']]);
@@ -37,10 +47,13 @@ if (isset($_POST['edit_country'])) {
 }
 
 // معالجة الحذف
-if (isset($_GET['delete'])) {
+if (isset($_POST['delete_country'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='countries.php';</script>");
+    }
     try {
         $stmt = $pdo->prepare("DELETE FROM countries WHERE id = ?");
-        $stmt->execute([$_GET['delete']]);
+        $stmt->execute([(int)$_POST['delete_country']]);
         echo "<script>location.href='countries.php?success=3';</script>";
     } catch (PDOException $e) {
         $error = "لا يمكن حذف الدولة لارتباطها بمدن أو معاملات أخرى.";
@@ -91,9 +104,13 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
                                         data-dial="<?php echo htmlspecialchars($c['dial_code']); ?>">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <a href="?delete=<?php echo $c['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('هل أنت متأكد؟ سيتم حذف كافة المدن المرتبطة بها.')">
-                                    <i class="fas fa-trash"></i>
-                                </a>
+                                <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد؟ سيتم حذف كافة المدن المرتبطة بها.')">
+                                    <?php echo csrf_input(); ?>
+                                    <input type="hidden" name="delete_country" value="<?php echo $c['id']; ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -109,6 +126,7 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header">
                     <h5 class="modal-title">إضافة دولة جديدة</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -141,6 +159,7 @@ $countries = $pdo->query("SELECT * FROM countries ORDER BY country_name ASC")->f
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header">
                     <h5 class="modal-title">تعديل بيانات الدولة</h5>

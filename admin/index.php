@@ -1,7 +1,5 @@
 <?php
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require_once __DIR__ . '/../includes/session_config.php';
 require_once '../includes/db.php';
 
 $current_admin_id = $_SESSION['admin_id'] ?? null;
@@ -58,7 +56,7 @@ if (!$is_admin_or_dev) {
     }
 }
 
-// دالة مساعدة لجلب إحصائيات خدمة معينة (اليوم، الشهر، الإجمالي)
+// دالة مساعدة لجلب إحصائيات خدمة معينة (اليوم، الشهر، الإجمالي، و مقارنة الشهر السابق)
 function getServiceStats($pdo, $table, $where_clause, $params, $date_col = 'created_at')
 {
     // إجمالي
@@ -71,16 +69,150 @@ function getServiceStats($pdo, $table, $where_clause, $params, $date_col = 'crea
     $today_stmt->execute($params);
     $today = $today_stmt->fetchColumn();
 
-    // الشهر
+    // الشهر الحالي
     $month_stmt = $pdo->prepare("SELECT COUNT(*) FROM $table p $where_clause AND MONTH(p.$date_col) = MONTH(CURDATE()) AND YEAR(p.$date_col) = YEAR(CURDATE())");
     $month_stmt->execute($params);
     $month = $month_stmt->fetchColumn();
 
-    return ['total' => $total, 'today' => $today, 'month' => $month];
+    // الشهر السابق
+    $prev_month_stmt = $pdo->prepare("SELECT COUNT(*) FROM $table p $where_clause AND MONTH(p.$date_col) = MONTH(CURDATE() - INTERVAL 1 MONTH) AND YEAR(p.$date_col) = YEAR(CURDATE() - INTERVAL 1 MONTH)");
+    $prev_month_stmt->execute($params);
+    $prev_month = $prev_month_stmt->fetchColumn();
+
+    // حساب النسبة المئوية للتغيير
+    $change_percent = 0;
+    if ($prev_month > 0) {
+        $change_percent = (($month - $prev_month) / $prev_month) * 100;
+    } elseif ($month > 0) {
+        $change_percent = 100; // زيادة 100% إذا كان الشهر السابق صفر
+    }
+
+    return ['total' => $total, 'today' => $today, 'month' => $month, 'prev_month' => $prev_month, 'change_percent' => $change_percent];
 }
 
-// 1. إحصائيات الجوازات (العامة)
-$passport_stats = getServiceStats($pdo, 'passports', $trans_where, $trans_params);
+// دالة مساعدة لجلب إحصائيات المرحل وغير المرحل لكل خدمة
+function getPostedUnpostedStats($pdo, $currentUser, $is_admin_or_dev)
+{
+    // تعريف الخدمات مع معلومات الجدول والشروط
+    $services = [
+        [
+            'name' => 'معاملات الجوازات',
+            'table' => 'passport_transactions',
+            'extra_where' => null
+        ],
+        [
+            'name' => 'تأشيرات العمل',
+            'table' => 'passports',
+            'extra_where' => "transaction_type IN ('work_visa', '6')"
+        ],
+        [
+            'name' => 'العمرة',
+            'table' => 'passports',
+            'extra_where' => "transaction_type = 'umrah'"
+        ],
+        [
+            'name' => 'الحج',
+            'table' => 'passports',
+            'extra_where' => "transaction_type = 'hajj'"
+        ],
+        [
+            'name' => 'تذاكر الطيران',
+            'table' => 'bus_flight_bookings',
+            'extra_where' => "service_type = 'flight'"
+        ],
+        [
+            'name' => 'حجوزات الباصات',
+            'table' => 'bus_flight_bookings',
+            'extra_where' => "service_type = 'bus'"
+        ],
+        [
+            'name' => 'خدمات البريد',
+            'table' => 'postal_shipments',
+            'extra_where' => null
+        ],
+        [
+            'name' => 'زيارة عائلية',
+            'table' => 'family_visit_requests',
+            'extra_where' => null
+        ]
+    ];
+
+    $stats = [];
+    foreach ($services as $service) {
+        // بناء شروط الفلاتر
+        $where_conds = [];
+        $params = [];
+
+        // شرط إضافي للخدمة
+        if ($service['extra_where']) {
+            $where_conds[] = $service['extra_where'];
+        }
+
+        // صلاحيات المستخدم
+        if (!$is_admin_or_dev) {
+            if ($currentUser['role_name'] === 'branch_manager' && !empty($currentUser['branch_id'])) {
+                $where_conds[] = "s.branch_id = ?";
+                $params[] = $currentUser['branch_id'];
+            } elseif ($currentUser['role_name'] === 'agent' && !empty($currentUser['agent_id'])) {
+                $where_conds[] = "s.agent_id = ?";
+                $params[] = $currentUser['agent_id'];
+            }
+        }
+
+        // 1. عد المرحل: المعاملات التي لها فاتورة بيع مرحلة
+        $all_conds = [];
+        if (!empty($where_conds)) {
+            $all_conds = $where_conds;
+        }
+        $all_conds[] = "i.invoice_status = 'posted'";
+        $posted_where_sql = implode(' AND ', $all_conds);
+        if (!empty($posted_where_sql)) {
+            $posted_where_sql = "WHERE " . $posted_where_sql;
+        }
+        $posted_sql = "
+            SELECT COUNT(DISTINCT s.id)
+            FROM " . $service['table'] . " s
+            LEFT JOIN invoices i ON i.source_id = s.id 
+                AND i.invoice_category = 'sales'
+            $posted_where_sql
+        ";
+        $posted_stmt = $pdo->prepare($posted_sql);
+        $posted_stmt->execute($params);
+        $posted = $posted_stmt->fetchColumn();
+
+        // 2. عد غير المرحل: المعاملات التي ليس لديها فاتورة بيع مرحلة (إما مسودة أو بدون فاتورة)
+        $draft_all_conds = [];
+        if (!empty($where_conds)) {
+            $draft_all_conds = $where_conds;
+        }
+        $draft_all_conds[] = "(i.id IS NULL OR i.invoice_status = 'draft')";
+        $draft_where_sql = implode(' AND ', $draft_all_conds);
+        if (!empty($draft_where_sql)) {
+            $draft_where_sql = "WHERE " . $draft_where_sql;
+        }
+        $draft_sql = "
+            SELECT COUNT(DISTINCT s.id)
+            FROM " . $service['table'] . " s
+            LEFT JOIN invoices i ON i.source_id = s.id 
+                AND i.invoice_category = 'sales'
+            $draft_where_sql
+        ";
+        $draft_stmt = $pdo->prepare($draft_sql);
+        $draft_stmt->execute($params);
+        $draft = $draft_stmt->fetchColumn();
+
+        $stats[] = [
+            'name' => $service['name'],
+            'posted' => $posted,
+            'draft' => $draft
+        ];
+    }
+
+    return $stats;
+}
+
+// 1. إحصائيات معاملات الجوازات (من passport_transactions)
+$passport_stats = getServiceStats($pdo, 'passport_transactions', $trans_where, $trans_params, 'created_at');
 
 // 2. إحصائيات تأشيرات العمل
 $work_visa_where = $trans_where . " AND (p.transaction_type = 'work_visa' OR p.transaction_type = '6')";
@@ -91,7 +223,7 @@ $umrah_where = $trans_where . " AND p.transaction_type = 'umrah'";
 $umrah_stats = getServiceStats($pdo, 'passports', $umrah_where, $trans_params);
 
 // 4. إحصائيات الزيارة العائلية
-$family_visit_enabled = ($settings['enable_family_visit'] ?? 0);
+$family_visit_enabled = get_module_status($pdo, 'enable_family_visit');
 $family_stats = ['total' => 0, 'today' => 0, 'month' => 0];
 if ($family_visit_enabled) {
     $family_where = "WHERE 1=1";
@@ -108,19 +240,54 @@ if ($family_visit_enabled) {
     $family_stats = getServiceStats($pdo, 'family_visit_requests', $family_where, $family_params);
 }
 
-// 5. إحصائيات الباصات والطيران (المدمجة)
-$bus_flight_where = "WHERE 1=1 AND (service_type = 'bus' OR service_type = 'flight')";
-$transport_params = [];
+// 5. إحصائيات الطيران فقط
+$flight_where = "WHERE 1=1 AND service_type = 'flight'";
+$flight_params = [];
 if (!$is_admin_or_dev) {
     if ($currentUser['role_name'] === 'branch_manager' && !empty($currentUser['branch_id'])) {
-        $bus_flight_where .= " AND branch_id = ?";
-        $transport_params[] = $currentUser['branch_id'];
+        $flight_where .= " AND branch_id = ?";
+        $flight_params[] = $currentUser['branch_id'];
     } elseif ($currentUser['role_name'] === 'agent' && !empty($currentUser['agent_id'])) {
-        $bus_flight_where .= " AND agent_id = ?";
-        $transport_params[] = $currentUser['agent_id'];
+        $flight_where .= " AND agent_id = ?";
+        $flight_params[] = $currentUser['agent_id'];
     }
 }
-$bus_flight_stats = getServiceStats($pdo, 'bus_flight_bookings', $bus_flight_where, $transport_params);
+$flight_stats = getServiceStats($pdo, 'bus_flight_bookings', $flight_where, $flight_params);
+
+// 6. إحصائيات الحج
+$hajj_where = $trans_where . " AND p.transaction_type = 'hajj'";
+$hajj_stats = getServiceStats($pdo, 'passports', $hajj_where, $trans_params);
+
+// 7. إحصائيات خدمات البريد
+$postal_where = "WHERE deleted_at IS NULL";
+$postal_params = [];
+if (!$is_admin_or_dev) {
+    if ($currentUser['role_name'] === 'branch_manager' && !empty($currentUser['branch_id'])) {
+        $postal_where .= " AND branch_id = ?";
+        $postal_params[] = $currentUser['branch_id'];
+    } elseif ($currentUser['role_name'] === 'agent' && !empty($currentUser['agent_id'])) {
+        $postal_where .= " AND agent_id = ?";
+        $postal_params[] = $currentUser['agent_id'];
+    }
+}
+$postal_stats = getServiceStats($pdo, 'postal_shipments', $postal_where, $postal_params);
+
+// 8. إحصائيات حجوزات الباصات
+$bus_where = "WHERE 1=1 AND service_type = 'bus'";
+$bus_params = [];
+if (!$is_admin_or_dev) {
+    if ($currentUser['role_name'] === 'branch_manager' && !empty($currentUser['branch_id'])) {
+        $bus_where .= " AND branch_id = ?";
+        $bus_params[] = $currentUser['branch_id'];
+    } elseif ($currentUser['role_name'] === 'agent' && !empty($currentUser['agent_id'])) {
+        $bus_where .= " AND agent_id = ?";
+        $bus_params[] = $currentUser['agent_id'];
+    }
+}
+$bus_stats = getServiceStats($pdo, 'bus_flight_bookings', $bus_where, $bus_params);
+
+// 9. إحصائيات المرحل وغير المرحل لكل خدمة
+$posted_unposted_stats = getPostedUnpostedStats($pdo, $currentUser, $is_admin_or_dev);
 
 // إحصائيات اليوم (للمقارنة السريعة في الواجهة)
 $today_passports = $passport_stats['today'];
@@ -345,7 +512,7 @@ $unresolved_work_visas->execute($work_visa_params);
 $unresolved_work_visas = $unresolved_work_visas->fetchColumn();
 
 // 8. إحصائيات الزيارة العائلية (Family Visit)
-$family_visit_enabled = ($settings['enable_family_visit'] ?? 0);
+$family_visit_enabled = get_module_status($pdo, 'enable_family_visit');
 $total_family_requests = 0;
 $total_family_individuals = 0;
 
@@ -589,6 +756,274 @@ $recent_transactions = $recent_transactions->fetchAll();
         body.theme-dark .card-body .border-start {
             border-left-color: rgba(255,255,255,0.05) !important;
         }
+
+        .container-fluid.px-4.py-4 {
+            background: #f5f7fb;
+            color: #172033;
+        }
+
+        .container-fluid.px-4.py-4 > .d-flex:first-of-type {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+
+        #stats-dashboard > .d-flex,
+        #financial-dashboard > .d-flex,
+        #messages-dashboard > h4,
+        #kanban-dashboard > h4,
+        #recent-transactions-dashboard > .d-flex {
+            padding: 0 0.15rem;
+        }
+
+        .dashboard-card,
+        .chart-container {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+
+        .dashboard-card:hover {
+            transform: translateY(-2px);
+            background: #ffffff;
+            border-color: #cbd5e1;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        }
+
+        .dashboard-card::before {
+            display: none;
+        }
+
+        .card-body {
+            padding: 1rem;
+        }
+
+        .dashboard-card .card-title,
+        .chart-container h5,
+        #stats-dashboard h4,
+        #financial-dashboard h4,
+        #messages-dashboard h4,
+        #kanban-dashboard h4,
+        #recent-transactions-dashboard h4 {
+            color: #172033;
+            line-height: 1.5;
+        }
+
+        .card-body h2,
+        .card-body h3 {
+            color: #0f172a;
+            letter-spacing: 0;
+            text-shadow: none;
+            line-height: 1.25;
+        }
+
+        .stat-badge {
+            background: #f8fafc;
+            color: #334155;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            box-shadow: none;
+            max-width: 100%;
+            white-space: normal;
+            text-align: start;
+        }
+
+        .icon-box {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            border: 0;
+            box-shadow: none;
+            flex: 0 0 36px;
+        }
+
+        .transaction-posting-card .card-body {
+            padding: 0;
+        }
+
+        .transaction-posting-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .transaction-posting-legend {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+
+        .transaction-posting-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .transaction-posting-legend .posted i,
+        .posting-count.posted {
+            color: #15803d;
+        }
+
+        .transaction-posting-legend .pending i,
+        .posting-count.pending {
+            color: #b45309;
+        }
+
+        .transaction-posting-table {
+            margin-bottom: 0;
+        }
+
+        .transaction-posting-table thead th {
+            background: #f8fafc;
+            color: #475569;
+            font-size: 0.82rem;
+            font-weight: 800;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 0.8rem 1rem;
+        }
+
+        .transaction-posting-table tbody td {
+            padding: 0.85rem 1rem;
+            border-bottom-color: #edf2f7;
+        }
+
+        .posting-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 48px;
+            height: 32px;
+            border-radius: 6px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            font-weight: 800;
+        }
+
+        .posting-count.total {
+            color: #1d4ed8;
+            background: #eff6ff;
+            border-color: #bfdbfe;
+        }
+
+        body.theme-dark .container-fluid.px-4.py-4 {
+            background: #0f172a;
+            color: #e5edf7;
+        }
+
+        body.theme-dark .container-fluid.px-4.py-4 > .d-flex:first-of-type,
+        body.theme-dark .dashboard-card,
+        body.theme-dark .dashboard-card.bg-light,
+        body.theme-dark .chart-container {
+            background: #111c2f !important;
+            border-color: #26364f !important;
+            box-shadow: none !important;
+            color: #e5edf7 !important;
+        }
+
+        body.theme-dark .dashboard-card h1,
+        body.theme-dark .dashboard-card h2,
+        body.theme-dark .dashboard-card h3,
+        body.theme-dark .dashboard-card h4,
+        body.theme-dark .dashboard-card h5,
+        body.theme-dark .dashboard-card h6,
+        body.theme-dark .dashboard-card .fw-bold,
+        body.theme-dark #stats-dashboard h4,
+        body.theme-dark #financial-dashboard h4,
+        body.theme-dark #messages-dashboard h4,
+        body.theme-dark #kanban-dashboard h4,
+        body.theme-dark #recent-transactions-dashboard h4 {
+            color: #f8fafc !important;
+            text-shadow: none !important;
+        }
+
+        body.theme-dark .stat-badge,
+        body.theme-dark .posting-count {
+            background: #16233a;
+            border-color: #26364f;
+            color: #dbeafe;
+            text-shadow: none;
+            box-shadow: none;
+        }
+
+        body.theme-dark .transaction-posting-header,
+        body.theme-dark .transaction-posting-table thead th,
+        body.theme-dark .transaction-posting-table tbody td {
+            border-color: #26364f;
+        }
+
+        body.theme-dark .transaction-posting-table thead th {
+            background: #16233a;
+            color: #cbd5e1;
+        }
+
+        @media (max-width: 768px) {
+            .container-fluid.px-4.py-4 {
+                padding-inline: 0.85rem !important;
+            }
+
+            .container-fluid.px-4.py-4 > .d-flex:first-of-type,
+            #stats-dashboard > .d-flex,
+            #financial-dashboard > .d-flex,
+            #recent-transactions-dashboard > .d-flex,
+            .transaction-posting-header {
+                align-items: flex-start !important;
+                flex-direction: column;
+            }
+
+            .transaction-posting-table thead {
+                display: none;
+            }
+
+            .transaction-posting-table tbody tr {
+                display: grid;
+                gap: 0.75rem;
+                padding: 1rem;
+                border-bottom: 1px solid #e2e8f0;
+                background: #fff;
+                border-radius: 0.5rem;
+                margin-bottom: 0.5rem;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            }
+
+            .transaction-posting-table tbody td {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 0.25rem 0;
+                border: 0;
+                text-align: start !important;
+            }
+
+            .transaction-posting-table tbody td.service-cell {
+                font-size: 1.05rem;
+                padding-bottom: 0.5rem;
+                border-bottom: 1px dashed #e2e8f0;
+                margin-bottom: 0.5rem;
+            }
+
+            .transaction-posting-table tbody td::before {
+                content: attr(data-label);
+                color: #64748b;
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+
+            .transaction-posting-table .posting-count {
+                font-weight: 700;
+                font-size: 1.1rem;
+            }
+        }
     </style>
     <!-- Welcome Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
@@ -610,14 +1045,14 @@ $recent_transactions = $recent_transactions->fetchAll();
 
         <div class="row g-3 mb-4">
             <!-- البطاقة الشاملة للجوازات -->
-            <div class="col-xl-3 col-md-6">
+            <div class="col-xl-2 col-md-6">
                 <div class="card dashboard-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start">
                             <div class="icon-box icon-box-primary">
                                 <i class="fas fa-passport"></i>
                             </div>
-                            <span class="stat-badge">إجمالي الجوازات</span>
+                            <span class="stat-badge">معاملة الجوازات</span>
                         </div>
                         <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($passport_stats['total']); ?></h2>
                         <div class="d-flex gap-3 mt-3 pt-3 border-top">
@@ -630,12 +1065,23 @@ $recent_transactions = $recent_transactions->fetchAll();
                                 <div class="fw-bold small"><?php echo number_format($passport_stats['month']); ?></div>
                             </div>
                         </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $passport_stats['change_percent'] > 0 ? 'text-success' : ($passport_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $passport_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($passport_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $passport_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($passport_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($passport_stats['prev_month']); ?>)</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- بطاقة تأشيرات العمل -->
-            <div class="col-xl-3 col-md-6">
+            <div class="col-xl-2 col-md-6">
                 <div class="card dashboard-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start">
@@ -655,12 +1101,23 @@ $recent_transactions = $recent_transactions->fetchAll();
                                 <div class="fw-bold small"><?php echo number_format($work_visa_stats['month']); ?></div>
                             </div>
                         </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $work_visa_stats['change_percent'] > 0 ? 'text-success' : ($work_visa_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $work_visa_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($work_visa_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $work_visa_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($work_visa_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($work_visa_stats['prev_month']); ?>)</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- بطاقة العمرة -->
-            <div class="col-xl-3 col-md-6">
+            <div class="col-xl-2 col-md-6">
                 <div class="card dashboard-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start">
@@ -680,17 +1137,64 @@ $recent_transactions = $recent_transactions->fetchAll();
                                 <div class="fw-bold small"><?php echo number_format($umrah_stats['month']); ?></div>
                             </div>
                         </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $umrah_stats['change_percent'] > 0 ? 'text-success' : ($umrah_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $umrah_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($umrah_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $umrah_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($umrah_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($umrah_stats['prev_month']); ?>)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- بطاقة الحج -->
+            <div class="col-xl-2 col-md-6">
+                <div class="card dashboard-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="icon-box icon-box-warning">
+                                <i class="fas fa-hotel"></i>
+                            </div>
+                            <span class="stat-badge">قسم الحج</span>
+                        </div>
+                        <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($hajj_stats['total']); ?></h2>
+                        <div class="d-flex gap-3 mt-3 pt-3 border-top">
+                            <div>
+                                <div class="text-muted extra-small">اليوم</div>
+                                <div class="fw-bold small"><?php echo number_format($hajj_stats['today']); ?></div>
+                            </div>
+                            <div class="border-start ps-3">
+                                <div class="text-muted extra-small">هذا الشهر</div>
+                                <div class="fw-bold small"><?php echo number_format($hajj_stats['month']); ?></div>
+                            </div>
+                        </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $hajj_stats['change_percent'] > 0 ? 'text-success' : ($hajj_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $hajj_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($hajj_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $hajj_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($hajj_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($hajj_stats['prev_month']); ?>)</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- بطاقة الزيارة العائلية -->
             <?php if ($family_visit_enabled): ?>
-                <div class="col-xl-3 col-md-6">
+                <div class="col-xl-2 col-md-6">
                     <div class="card dashboard-card h-100">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-start">
-                                <div class="icon-box icon-box-warning">
+                                <div class="icon-box icon-box-danger">
                                     <i class="fas fa-users"></i>
                                 </div>
                                 <span class="stat-badge">الزيارة العائلية</span>
@@ -706,60 +1210,175 @@ $recent_transactions = $recent_transactions->fetchAll();
                                     <div class="fw-bold small"><?php echo number_format($family_stats['month']); ?></div>
                                 </div>
                             </div>
+                            <!-- مقارنة الشهر السابق -->
+                            <div class="mt-2 pt-2 border-top">
+                                <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                                <div class="d-flex align-items-center gap-1">
+                                    <span class="fw-bold <?php echo $family_stats['change_percent'] > 0 ? 'text-success' : ($family_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                        <?php echo $family_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($family_stats['change_percent'], 1); ?>%
+                                    </span>
+                                    <i class="fas <?php echo $family_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($family_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                    <span class="text-muted extra-small">(<?php echo number_format($family_stats['prev_month']); ?>)</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
             <?php endif; ?>
 
-            <!-- بطاقة تذاكر طيران وبصات -->
-            <div class="col-xl-3 col-md-6">
+            <!-- بطاقة تذاكر طيران فقط -->
+            <div class="col-xl-2 col-md-6">
                 <div class="card dashboard-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div class="icon-box icon-box-danger">
-                                <i class="fas fa-route"></i>
+                            <div class="icon-box icon-box-dark">
+                                <i class="fas fa-plane"></i>
                             </div>
-                            <span class="stat-badge">تذاكر طيران وبصات</span>
+                            <span class="stat-badge">تذاكر طيران</span>
                         </div>
-                        <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($bus_flight_stats['total']); ?></h2>
+                        <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($flight_stats['total']); ?></h2>
                         <div class="d-flex gap-3 mt-3 pt-3 border-top">
                             <div>
                                 <div class="text-muted extra-small">اليوم</div>
-                                <div class="fw-bold small"><?php echo number_format($bus_flight_stats['today']); ?></div>
+                                <div class="fw-bold small"><?php echo number_format($flight_stats['today']); ?></div>
                             </div>
                             <div class="border-start ps-3">
                                 <div class="text-muted extra-small">هذا الشهر</div>
-                                <div class="fw-bold small"><?php echo number_format($bus_flight_stats['month']); ?></div>
+                                <div class="fw-bold small"><?php echo number_format($flight_stats['month']); ?></div>
+                            </div>
+                        </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $flight_stats['change_percent'] > 0 ? 'text-success' : ($flight_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $flight_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($flight_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $flight_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($flight_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($flight_stats['prev_month']); ?>)</span>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- بطاقة الوكلاء والعملاء -->
-            <div class="col-xl-3 col-md-6">
+            <!-- بطاقة خدمات البريد -->
+            <div class="col-xl-2 col-md-6">
                 <div class="card dashboard-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div class="icon-box icon-box-primary">
-                                <i class="fas fa-handshake"></i>
+                            <div class="icon-box icon-box-info">
+                                <i class="fas fa-envelope"></i>
                             </div>
-                            <span class="stat-badge">الوكلاء والعملاء</span>
+                            <span class="stat-badge">خدمات البريد</span>
                         </div>
-                        <div class="row g-0 mt-2">
-                            <div class="col-6 border-end">
-                                <h3 class="fw-bold mb-0"><?php echo number_format($agents_count); ?></h3>
-                                <div class="text-muted extra-small">وكلاء</div>
+                        <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($postal_stats['total']); ?></h2>
+                        <div class="d-flex gap-3 mt-3 pt-3 border-top">
+                            <div>
+                                <div class="text-muted extra-small">اليوم</div>
+                                <div class="fw-bold small"><?php echo number_format($postal_stats['today']); ?></div>
                             </div>
-                            <div class="col-6 ps-3">
-                                <h3 class="fw-bold mb-0"><?php echo number_format($customers_count); ?></h3>
-                                <div class="text-muted extra-small">عملاء</div>
+                            <div class="border-start ps-3">
+                                <div class="text-muted extra-small">هذا الشهر</div>
+                                <div class="fw-bold small"><?php echo number_format($postal_stats['month']); ?></div>
+                            </div>
+                        </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $postal_stats['change_percent'] > 0 ? 'text-success' : ($postal_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $postal_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($postal_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $postal_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($postal_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($postal_stats['prev_month']); ?>)</span>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- بطاقة حجوزات الباصات -->
+            <div class="col-xl-2 col-md-6">
+                <div class="card dashboard-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="icon-box icon-box-warning">
+                                <i class="fas fa-bus"></i>
+                            </div>
+                            <span class="stat-badge">حجوزات الباصات</span>
+                        </div>
+                        <h2 class="fw-bold mb-1 mt-2"><?php echo number_format($bus_stats['total']); ?></h2>
+                        <div class="d-flex gap-3 mt-3 pt-3 border-top">
+                            <div>
+                                <div class="text-muted extra-small">اليوم</div>
+                                <div class="fw-bold small"><?php echo number_format($bus_stats['today']); ?></div>
+                            </div>
+                            <div class="border-start ps-3">
+                                <div class="text-muted extra-small">هذا الشهر</div>
+                                <div class="fw-bold small"><?php echo number_format($bus_stats['month']); ?></div>
+                            </div>
+                        </div>
+                        <!-- مقارنة الشهر السابق -->
+                        <div class="mt-2 pt-2 border-top">
+                            <div class="text-muted extra-small">مقارنة الشهر السابق</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="fw-bold <?php echo $bus_stats['change_percent'] > 0 ? 'text-success' : ($bus_stats['change_percent'] < 0 ? 'text-danger' : 'text-muted'); ?>">
+                                    <?php echo $bus_stats['change_percent'] > 0 ? '+' : ''; ?><?php echo number_format($bus_stats['change_percent'], 1); ?>%
+                                </span>
+                                <i class="fas <?php echo $bus_stats['change_percent'] > 0 ? 'fa-arrow-up text-success' : ($bus_stats['change_percent'] < 0 ? 'fa-arrow-down text-danger' : 'fa-minus text-muted'); ?> extra-small"></i>
+                                <span class="text-muted extra-small">(<?php echo number_format($bus_stats['prev_month']); ?>)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- جدول المرحل وغير المرحل لكل خدمة -->
+        <div class="row g-4 mt-4" id="transaction-posting-status">
+            <div class="col-12">
+                <div class="card dashboard-card transaction-posting-card">
+                    <div class="card-body">
+                        <div class="transaction-posting-header mb-4">
+                            <h5 class="card-title fw-bold mb-0">حالة الترحيل</h5>
+                            <div class="transaction-posting-legend">
+                                <span class="posted"><i class="fas fa-check-circle"></i> مرحل</span>
+                                <span class="pending"><i class="fas fa-clock"></i> غير مرحل</span>
+                            </div>
+                        </div>
+                        <div class="table-responsive transaction-posting-table-wrap">
+                            <table class="table table-hover align-middle transaction-posting-table">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>الخدمة</th>
+                                        <th class="text-center">المرحل</th>
+                                        <th class="text-center">غير المرحل</th>
+                                        <th class="text-center">الإجمالي</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($posted_unposted_stats as $stat) : ?>
+                                        <tr>
+                                            <td class="fw-bold service-cell" data-label="الخدمة"><?php echo htmlspecialchars($stat['name']); ?></td>
+                                            <td class="text-center" data-label="المرحل">
+                                                <span class="posting-count posted"><?php echo number_format($stat['posted']); ?></span>
+                                            </td>
+                                            <td class="text-center" data-label="غير المرحل">
+                                                <span class="posting-count pending"><?php echo number_format($stat['draft']); ?></span>
+                                            </td>
+                                            <td class="text-center" data-label="الإجمالي">
+                                                <span class="posting-count total"><?php echo number_format($stat['posted'] + $stat['draft']); ?></span>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="row g-4">
@@ -1686,8 +2305,8 @@ $recent_transactions = $recent_transactions->fetchAll();
                     <div class="list-group list-group-flush">
                         <?php foreach ($recent_workflows as $wf): ?>
                             <div class="list-group-item p-3">
-                                <div class="fw-bold"><?php echo htmlspecialchars($wf['workflow_name']); ?></div>
-                                <div class="small text-muted"><?php echo htmlspecialchars($wf['description']); ?></div>
+                                <div class="fw-bold"><?php echo htmlspecialchars($wf['workflow_name'] ?? $wf['name'] ?? ''); ?></div>
+                                <div class="small text-muted"><?php echo htmlspecialchars($wf['description'] ?? ''); ?></div>
                             </div>
                         <?php endforeach; ?>
                     </div>
@@ -1701,3 +2320,4 @@ $recent_transactions = $recent_transactions->fetchAll();
 </div>
 
 <?php require_once 'footer.php'; ?>
+

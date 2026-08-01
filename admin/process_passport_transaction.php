@@ -43,7 +43,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id_number = htmlspecialchars($_POST['id_number'] ?? '');
                 $from_city_id = (int)$_POST['from_city_id'];
                 $to_city_id = (int)$_POST['to_city_id'];
-                $transaction_type_id = (int)$_POST['transaction_type_id'];
+                if ($from_city_id === $to_city_id) {
+                    throw new Exception('لا يمكن أن تكون المدينة المنطلق نفس المدينة المقصود.');
+                }
+                $transaction_type_ids = $_POST['transaction_type_id'] ?? [];
+                if (!is_array($transaction_type_ids)) {
+                    $transaction_type_ids = [$transaction_type_ids];
+                }
+                $transaction_type_ids = array_values(array_filter(array_map('intval', $transaction_type_ids)));
+                $transaction_type_id = $transaction_type_ids[0] ?? 0;
                 $transaction_type = htmlspecialchars($_POST['transaction_type'] ?? 'both');
 
                 $card_transaction_number = htmlspecialchars($_POST['card_transaction_number'] ?? null);
@@ -56,25 +64,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $passport_number = htmlspecialchars($_POST['passport_number'] ?? null);
                 $passport_issue_date = !empty($_POST['passport_issue_date']) ? $_POST['passport_issue_date'] : null;
                 $travel_date = !empty($_POST['travel_date']) ? $_POST['travel_date'] : null;
+                $today = date('Y-m-d');
+
+                if (!empty($date_of_birth) && $date_of_birth > $today) {
+                    throw new Exception('تاريخ الميلاد يجب أن يكون اليوم أو قبله.');
+                }
+
+                if (!empty($travel_date) && $travel_date < $today) {
+                    throw new Exception('تاريخ السفر يجب أن يكون اليوم أو بعده.');
+                }
 
                 $delivery_receiver_name = htmlspecialchars($_POST['delivery_receiver_name'] ?? null);
                 $operation_date = $_POST['operation_date'] ?? date('Y-m-d');
                 
                 // البيانات المالية المحسنة (من financial_fields.php)
-                $currency_id = (int)$_POST['currency_id'];
-                $sale_currency_id = $currency_id;
-                $purchase_currency_id = $currency_id;
-                $sale_price = (float)$_POST['total_amount'];
+                $sale_currency_id = (int)($_POST['sale_currency_id'] ?? $_POST['currency_id'] ?? 1);
+                $purchase_currency_id = (int)($_POST['currency_id'] ?? $sale_currency_id ?: 1);
+                $sale_price = (float)($_POST['total_amount'] ?? 0);
                 $discount = (float)($_POST['discount'] ?? 0);
-                $tax_rate = (float)($_POST['tax_rate'] ?? 0);
-                // احسب سعر الشراء من نوع المعاملة
-                $stmt = $pdo->prepare("SELECT default_cost FROM passport_transaction_types WHERE id = ?");
-                $stmt->execute([$transaction_type_id]);
-                $type = $stmt->fetch();
-                $purchase_price = $type ? (float)$type['default_cost'] : 0;
-                $exchange_rate = 1;
-                $amount_received = (float)($_POST['amount_received'] ?? 0);
-                $delivery_type = htmlspecialchars($_POST['payment_type'] ?? 'draft');
+                $purchase_price = (float)($_POST['cost_amount'] ?? 0);
+                $exchange_rate = (float)($_POST['exchange_rate'] ?? 1);
+                $amount_received = (float)($_POST['received_amount'] ?? $_POST['amount_received'] ?? 0);
+                $delivery_type = htmlspecialchars($_POST['delivery_type'] ?? 'draft');
                 $record_purchase = isset($_POST['record_purchase']) && $_POST['record_purchase'] == '1';
                 $supplier_id = !empty($_POST['supplier_id']) ? (int)$_POST['supplier_id'] : null;
                 $account_id = !empty($_POST['account_id']) ? (int)$_POST['account_id'] : null;
@@ -135,6 +146,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $service_id = !empty($_POST['service_id']) ? (int)$_POST['service_id'] : null;
+                if ($transaction_type_id <= 0) {
+                    throw new Exception('يرجى اختيار نوع المعاملة (التسعيرة).');
+                }
+                if ($from_city_id === $to_city_id) {
+                    throw new Exception('لا يمكن أن تكون المدينة المنطلق نفس المدينة المقصود.');
+                }
                 
                 // Insert into passport_transactions
                 $stmt = $pdo->prepare("
@@ -167,6 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 require_once '../includes/ServiceFinancialEngine.php';
                 $financialEngine = new ServiceFinancialEngine($pdo, $created_by);
                 $financeResults = $financialEngine->processServiceFinance([
+                    'source_type'     => 'معاملات جوازات',
                     'service_type'    => 'passport_transaction',
                     'source_id'       => $transaction_id,
                     'source_number'   => $transaction_number,
@@ -183,8 +201,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'amount_received' => $amount_received,
                     'payment_account_id' => $account_id,
                     'delivery_type'   => $delivery_type,
+                    'record_purchase' => $record_purchase ? '1' : '0',
                     'description'     => $_POST['description'] ?? "معاملة جواز رقم: " . $transaction_number . " للمسافر: " . $full_name,
-                    'operation_date'  => $_POST['invoice_date'] ?? $operation_date
+                    'operation_date'  => normalize_datetime_db($_POST['invoice_date'] ?? $operation_date)
                 ]);
 
                 // ربط المعاملة بفاتورة البيع والشراء
@@ -233,7 +252,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id_number = htmlspecialchars($_POST['id_number'] ?? '');
                 $from_city_id = (int)$_POST['from_city_id'];
                 $to_city_id = (int)$_POST['to_city_id'];
-                $transaction_type_id = (int)$_POST['transaction_type_id'];
+                if ($from_city_id === $to_city_id) {
+                    throw new Exception('لا يمكن أن تكون المدينة المنطلق نفس المدينة المقصود.');
+                }
+                $transaction_type_ids = $_POST['transaction_type_id'] ?? [];
+                if (!is_array($transaction_type_ids)) {
+                    $transaction_type_ids = [$transaction_type_ids];
+                }
+                $transaction_type_ids = array_values(array_filter(array_map('intval', $transaction_type_ids)));
+                $transaction_type_id = $transaction_type_ids[0] ?? 0;
                 $transaction_type = htmlspecialchars($_POST['transaction_type'] ?? 'both');
 
                 $card_transaction_number = htmlspecialchars($_POST['card_transaction_number'] ?? null);
@@ -246,131 +273,140 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $passport_number = htmlspecialchars($_POST['passport_number'] ?? null);
                 $passport_issue_date = !empty($_POST['passport_issue_date']) ? $_POST['passport_issue_date'] : null;
                 $travel_date = !empty($_POST['travel_date']) ? $_POST['travel_date'] : null;
+                $today = date('Y-m-d');
+
+                if (!empty($date_of_birth) && $date_of_birth > $today) {
+                    throw new Exception('تاريخ الميلاد يجب أن يكون اليوم أو قبله.');
+                }
+
+                if (!empty($travel_date) && $travel_date < $today) {
+                    throw new Exception('تاريخ السفر يجب أن يكون اليوم أو بعده.');
+                }
 
                 $delivery_receiver_name = htmlspecialchars($_POST['delivery_receiver_name'] ?? null);
                 $operation_date = $_POST['operation_date'] ?? date('Y-m-d');
                 
                 // البيانات المالية المحسنة للتعديل
-                $sale_currency_id = (int)$_POST['sale_currency_id'];
-                $purchase_currency_id = (int)$_POST['currency_id'];
-                $sale_price = (float)$_POST['sale_price'];
+                $sale_currency_id = (int)($_POST['sale_currency_id'] ?? $_POST['currency_id'] ?? 1);
+                $purchase_currency_id = (int)($_POST['currency_id'] ?? $sale_currency_id ?: 1);
+                $sale_price = (float)($_POST['total_amount'] ?? $_POST['sale_price'] ?? 0);
                 $discount = (float)($_POST['discount'] ?? 0);
-                $purchase_price = (float)$_POST['purchase_price'];
+                $purchase_price = (float)($_POST['cost_amount'] ?? $_POST['purchase_price'] ?? 0);
                 $exchange_rate = (float)($_POST['exchange_rate'] ?? 1);
-                $amount_received = (float)($_POST['amount_received'] ?? 0);
+                $amount_received = (float)($_POST['received_amount'] ?? $_POST['amount_received'] ?? 0);
                 $delivery_type = htmlspecialchars($_POST['delivery_type'] ?? 'draft');
                 $record_purchase = isset($_POST['record_purchase']) && $_POST['record_purchase'] == '1';
                 $supplier_id = !empty($_POST['supplier_id']) ? (int)$_POST['supplier_id'] : null;
                 $account_id = !empty($_POST['account_id']) ? (int)$_POST['account_id'] : null;
+                $branch_id = !empty($_POST['branch_id']) ? (int)$_POST['branch_id'] : null;
                 
                 // معالجة العميل أو الوكيل
                 $customer_raw = $_POST['customer_id'] ?? '';
                 $customer_id = null;
                 $agent_id_from_post = null;
                 
-                if (strpos($customer_raw, 'cust_') === 0) {
-                    $customer_id = (int)str_replace('cust_', '', $customer_raw);
-                } elseif (strpos($customer_raw, 'agent_') === 0) {
-                    $agent_id_from_post = (int)str_replace('agent_', '', $customer_raw);
+                if (!empty($customer_raw)) {
+                    if (strpos($customer_raw, 'cust_') === 0) {
+                        $customer_id = (int)str_replace('cust_', '', $customer_raw);
+                    } elseif (strpos($customer_raw, 'agent_') === 0) {
+                        $agent_id_from_post = (int)str_replace('agent_', '', $customer_raw);
+                    } else {
+                        $customer_id = (int)$customer_raw;
+                    }
+                }
+
+                if (empty($agent_id_from_post) && !empty($_POST['agent_id'])) {
+                    $agent_id_from_post = (int)$_POST['agent_id'];
                 }
 
                 $description = htmlspecialchars($_POST['description'] ?? null);
                 $notes = htmlspecialchars($_POST['notes'] ?? null);
-
-                // حساب التكلفة بعملة البيع
-                $cost_in_sale_currency = $purchase_price;
-                if ($sale_currency_id != $purchase_currency_id && $exchange_rate > 0) {
-                    $cost_in_sale_currency = $purchase_price * $exchange_rate;
+                $service_id = !empty($_POST['service_id']) ? (int)$_POST['service_id'] : null;
+                $transaction_number = htmlspecialchars($_POST['transaction_number'] ?? '');
+                if ($transaction_type_id <= 0) {
+                    throw new Exception('يرجى اختيار نوع المعاملة (التسعيرة).');
                 }
-
+                
                 // Update passport_transactions
                 $stmt = $pdo->prepare("
                     UPDATE `passport_transactions` SET 
-                        `full_name` = ?, `phone_number` = ?, `place_of_birth` = ?, `date_of_birth` = ?, 
+                        `transaction_number` = ?, `full_name` = ?, `phone_number` = ?, `place_of_birth` = ?, `date_of_birth` = ?, 
                         `id_type` = ?, `id_number` = ?, `from_city_id` = ?, `to_city_id` = ?, `travel_date` = ?, `transaction_type_id` = ?, `transaction_type` = ?, 
                         `card_transaction_number` = ?, `card_transaction_date` = ?, `card_number` = ?, `card_issue_date` = ?, 
                         `passport_transaction_number` = ?, `passport_transaction_date` = ?, `passport_number` = ?, `passport_issue_date` = ?, 
                         `delivery_receiver_name` = ?, `operation_date` = ?, `customer_id` = ?, `agent_id` = ?,
-                        `description` = ?, `notes` = ?
+                        `description` = ?, `notes` = ?, `service_id` = ?
                     WHERE `id` = ?
                 ");
 
                 $stmt->execute([
-                    $full_name, $phone_number, $place_of_birth, $date_of_birth,
+                    $transaction_number, $full_name, $phone_number, $place_of_birth, $date_of_birth,
                     $id_type, $id_number, $from_city_id, $to_city_id, $travel_date, $transaction_type_id, $transaction_type,
                     $card_transaction_number, $card_transaction_date, $card_number, $card_issue_date,
                     $passport_transaction_number, $passport_transaction_date, $passport_number, $passport_issue_date,
                     $delivery_receiver_name, $operation_date, $customer_id, $agent_id_from_post,
-                    $description, $notes, $id
+                    $description, $notes, $service_id, $id
                 ]);
-
-                // تحديث الفواتير المرتبطة
-                $stmt_invoices = $pdo->prepare("SELECT id, invoice_category, amount_received FROM invoices WHERE source_type = 'passport_transaction' AND source_id = ?");
-                $stmt_invoices->execute([$id]);
-                $existing_invoices = $stmt_invoices->fetchAll(PDO::FETCH_ASSOC);
-
-                $sales_invoice_exists = false;
-                $purchase_invoice_exists = false;
-
-                foreach ($existing_invoices as $ex_inv) {
-                    if ($ex_inv['invoice_category'] == 'sales') {
-                        $sales_invoice_exists = true;
-                        $invoice_payment_status = ($amount_received >= ($sale_price - $discount)) ? 'fully_paid' : ($amount_received > 0 ? 'partial' : 'unpaid');
-                        
-                        $pdo->prepare("
-                            UPDATE invoices 
-                            SET total_amount = ?, discount_amount = ?, cost_amount = ?, currency_id = ?, 
-                                delivery_type = ?, customer_id = ?, agent_id = ?, account_id = ?, 
-                                amount_received = ?, payment_status = ?
-                            WHERE id = ?
-                        ")->execute([
-                            $sale_price, $discount, $cost_in_sale_currency, $sale_currency_id,
-                            $delivery_type, $customer_id, $agent_id_from_post, $account_id,
-                            $amount_received, $invoice_payment_status, $ex_inv['id']
-                        ]);
-                    }
-                    
-                    if ($ex_inv['invoice_category'] == 'purchase') {
-                        $purchase_invoice_exists = true;
-                        if ($record_purchase && $supplier_id && $purchase_price > 0) {
-                            $pdo->prepare("
-                                UPDATE invoices 
-                                SET total_amount = ?, currency_id = ?, supplier_id = ?
-                                WHERE id = ?
-                            ")->execute([$purchase_price, $purchase_currency_id, $supplier_id, $ex_inv['id']]);
-                        } else {
-                            // إذا تم إلغاء خيار الشراء أو أصبحت القيمة 0، نحذف فاتورة الشراء (أو نتركها صفرية حسب سياسة النظام)
-                            $pdo->prepare("DELETE FROM invoices WHERE id = ?")->execute([$ex_inv['id']]);
-                            $purchase_invoice_exists = false;
-                        }
-                    }
-                }
-
-                // إنشاء فواتير جديدة إذا لم تكن موجودة
-                if (!$sales_invoice_exists) {
-                    php_create_invoice($pdo, 'sales', $currentUser['branch_id'], 'passport_transaction', $id, $customer_id, $sale_currency_id, $sale_price, $discount, $cost_in_sale_currency, $delivery_type, "فاتورة مبيعات معاملة جواز رقم: " . $id, $_SESSION['admin_id'], $agent_id_from_post, $account_id);
+                
+                // حذف الفواتير القديمة والترحيلات المالية
+                $stmt_old_invoices = $pdo->prepare("SELECT id FROM invoices WHERE source_type = 'passport_transaction' AND source_id = ?");
+                $stmt_old_invoices->execute([$id]);
+                $old_invoices = $stmt_old_invoices->fetchAll(PDO::FETCH_COLUMN);
+                
+                foreach ($old_invoices as $old_inv_id) {
+                    // حذف التخصيصات
+                    $pdo->prepare("DELETE FROM payment_allocations WHERE invoice_id = ?")->execute([$old_inv_id]);
+                    // حذف القيود
+                    $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id IN (SELECT id FROM financial_transactions WHERE invoice_id = ?)")->execute([$old_inv_id]);
+                    $pdo->prepare("DELETE FROM journal_entries WHERE id IN (SELECT journal_entry_id FROM journal_lines WHERE invoice_id = ?)")->execute([$old_inv_id]);
+                    // حذف المعاملات المالية
+                    $pdo->prepare("DELETE FROM financial_transactions WHERE invoice_id = ?")->execute([$old_inv_id]);
+                    // حذف الفاتورة
+                    $pdo->prepare("DELETE FROM invoices WHERE id = ?")->execute([$old_inv_id]);
                 }
                 
-                if (!$purchase_invoice_exists && $record_purchase && $supplier_id && $purchase_price > 0) {
-                    php_create_invoice(
-                        $pdo, 
-                        'purchase', 
-                        $currentUser['branch_id'], 
-                        'passport_transaction', 
-                        $id, 
-                        $supplier_id, 
-                        $purchase_currency_id, 
-                        $purchase_price, 
-                        0, 
-                        0, 
-                        'credit', 
-                        "فاتورة تكلفة معاملة جواز رقم: " . $id, 
-                        $_SESSION['admin_id'], 
-                        null, 
-                        null, 
-                        null // cost_center_id
-                    );
-                }
+                // تحديث أو إضافة الفواتير الجديدة باستخدام المحرك المالي
+                require_once '../includes/ServiceFinancialEngine.php';
+                $financialEngine = new ServiceFinancialEngine($pdo, $_SESSION['admin_id']);
+                
+                // إعداد supplier_id إذا كان record_purchase مفعلًا
+                $final_supplier_id = $record_purchase ? $supplier_id : null;
+                $final_purchase_price = $record_purchase ? $purchase_price : 0;
+                
+                $financeResults = $financialEngine->processServiceFinance([
+                    'source_type'     => 'معاملات جوازات',
+                    'service_type'    => 'passport_transaction',
+                    'source_id'       => $id,
+                    'source_number'   => $transaction_number,
+                    'branch_id'       => $branch_id,
+                    'customer_id'     => $customer_id,
+                    'agent_id'        => $agent_id_from_post,
+                    'supplier_id'     => $final_supplier_id,
+                    'sale_price'      => $sale_price,
+                    'discount'        => $discount,
+                    'purchase_price'  => $final_purchase_price,
+                    'sale_currency_id'=> $sale_currency_id,
+                    'pur_currency_id' => $purchase_currency_id,
+                    'exchange_rate'   => $exchange_rate,
+                    'amount_received' => $amount_received,
+                    'payment_account_id' => $account_id,
+                    'delivery_type'   => $delivery_type,
+                    'record_purchase' => $record_purchase ? '1' : '0',
+                    'description'     => $description ?? "معاملة جواز رقم: " . $transaction_number . " للمسافر: " . $full_name,
+                    'operation_date'  => normalize_datetime_db($_POST['invoice_date'] ?? $operation_date)
+                ], true); // true = skip transaction because we already started one
+                
+                // ربط المعاملة بفاتورة البيع والشراء
+                $update_stmt = $pdo->prepare("
+                    UPDATE passport_transactions 
+                    SET sales_invoice_id = ?, purchase_invoice_id = ?, auto_invoice_generated = 1 
+                    WHERE id = ?
+                ");
+                $update_stmt->execute([
+                    $financeResults['sales_invoice_id'], 
+                    $financeResults['purchase_invoice_id'] ?? null, 
+                    $id
+                ]);
 
                 $pdo->commit();
                 $_SESSION['flash_message'] = ['type' => 'success', 'title' => 'تم التحديث', 'body' => 'تم تحديث بيانات المعاملة بنجاح.'];

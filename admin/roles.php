@@ -441,15 +441,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                     </div>
 
                     <!-- Modal تعديل دور لكل دور في القائمة -->
-                    <div class="modal fade" id="editRoleModal<?php echo $rid; ?>" tabindex="-1">
-                        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal fade role-edit-modal" id="editRoleModal<?php echo $rid; ?>" tabindex="-1">
+                        <div class="modal-dialog modal-xl modal-dialog-scrollable">
                             <div class="modal-content border-0 shadow-lg rounded-4">
+                                <div class="modal-header bg-primary text-white border-0 py-3">
+                                    <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل دور: <?php echo htmlspecialchars($role['display_name']); ?></h5>
+                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                </div>
                                 <form method="POST">
                                     <input type="hidden" name="id" value="<?php echo $rid; ?>">
-                                    <div class="modal-header bg-primary text-white border-0 py-3">
-                                        <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل دور: <?php echo htmlspecialchars($role['display_name']); ?></h5>
-                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                                    </div>
                                     <div class="modal-body p-4 bg-light">
                                         <div class="card border-0 shadow-sm rounded-4 mb-4">
                                             <div class="card-body p-4">
@@ -475,11 +475,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                             <?php foreach ($permission_groups as $g_key => $group): ?>
                                                 <div class="col-12">
                                                     <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
-                                                        <div class="card-header bg-primary text-white py-2 px-3">
+                                                        <div class="card-header bg-primary text-white py-2 px-3 d-flex align-items-center justify-content-between">
                                                             <h6 class="mb-0 small fw-bold"><i class="fas <?php echo $group['icon']; ?> me-2"></i> <?php echo $group['title']; ?></h6>
+                                                            <div class="form-check form-switch m-0">
+                                                                <input class="form-check-input group-select-all-cb" type="checkbox" id="group_sel_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>" data-accordion="#accordion_edit_<?php echo $rid . '_' . $g_key; ?>" style="cursor:pointer;">
+                                                                <label class="form-check-label small fw-bold ms-2" for="group_sel_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>" style="cursor:pointer; font-size: 0.8rem;">تفعيل المجموعة كاملة</label>
+                                                            </div>
                                                         </div>
                                                         <div class="card-body p-0">
-                                                            <div class="accordion accordion-flush" id="accordion_edit_<?php echo $rid . '_' . $g_key; ?>">
+                                                            <div class="accordion accordion-flush perm-accordion-group" id="accordion_edit_<?php echo $rid . '_' . $g_key; ?>" data-group-master="group_sel_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>">
                                                                 <?php 
                                                                 $idx_g = 0;
                                                                 foreach ($group['categories'] as $cat):
@@ -490,20 +494,26 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                                                 ?>
                                                                     <div class="accordion-item">
                                                                         <h2 class="accordion-header">
-                                                                            <button class="accordion-button collapsed py-2 px-3 small fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#<?php echo $collapseId; ?>">
-                                                                                <?php echo $cat_name; ?> <span class="badge bg-light text-primary border rounded-pill ms-auto extra-small"><?php echo count($perms); ?></span>
-                                                                            </button>
+                                                                            <div class="d-flex align-items-center py-2 px-3" style="gap: 12px;">
+                                                                                <div class="form-check form-switch m-0 p-0 select-all-wrapper" data-target="#<?php echo $collapseId; ?>">
+                                                                                    <input class="form-check-input select-all-cb" type="checkbox" id="select_all_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>_<?php echo $idx_g; ?>" style="cursor:pointer;">
+                                                                                    <label class="form-check-label small fw-bold text-muted" for="select_all_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>_<?php echo $idx_g; ?>" style="cursor:pointer;">تحديد الكل</label>
+                                                                                </div>
+                                                                                <button class="accordion-button collapsed small fw-bold flex-grow-1" type="button" data-bs-toggle="collapse" data-bs-target="#<?php echo $collapseId; ?>">
+                                                                                    <?php echo $cat_name; ?> <span class="badge bg-light text-primary border rounded-pill ms-auto extra-small"><?php echo count($perms); ?></span>
+                                                                                </button>
+                                                                            </div>
                                                                         </h2>
                                                                         <div id="<?php echo $collapseId; ?>" class="accordion-collapse collapse" data-bs-parent="#accordion_edit_<?php echo $rid . '_' . $g_key; ?>">
                                                                             <div class="accordion-body p-3">
-                                                                                <div class="row g-2">
+                                                                                <div class="row g-2 perm-group" data-parent="select_all_edit_<?php echo $rid; ?>_<?php echo $g_key; ?>_<?php echo $idx_g; ?>">
                                                                                     <?php foreach ($perms as $p): 
                                                                                         $is_checked = in_array($p['id'], $current_role_perms);
                                                                                     ?>
                                                                                         <div class="col-md-4">
                                                                                             <label class="perm-card mb-2 <?php echo $is_checked ? 'is-active' : ''; ?>" for="p_e_<?php echo $rid; ?>_<?php echo $p['id']; ?>">
                                                                                                 <span class="perm-title"><?php echo htmlspecialchars($p['display_name']); ?></span>
-                                                                                                <input class="form-check-input perm-checkbox" type="checkbox" name="permissions[]" value="<?php echo $p['id']; ?>" id="p_e_<?php echo $rid; ?>_<?php echo $p['id']; ?>" <?php echo $is_checked ? 'checked' : ''; ?>>
+                                                                                                <input class="form-check-input perm-checkbox" type="checkbox" name="permissions[]" value="<?php echo $p['id']; ?>" id="p_e_<?php echo $rid; ?>_<?php echo $p['id']; ?>" <?php echo $is_checked ? 'checked' : ''; ?> data-original="<?php echo $is_checked ? '1' : '0'; ?>">
                                                                                             </label>
                                                                                         </div>
                                                                                     <?php endforeach; ?>
@@ -519,9 +529,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                             <?php endforeach; ?>
                                         </div>
                                     </div>
-                                    <div class="modal-footer bg-white border-top-0 py-3">
-                                        <button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">إلغاء</button>
-                                        <button type="submit" name="update_role" class="btn btn-primary rounded-pill px-5 fw-bold">حفظ التغييرات</button>
+                                    <div class="modal-footer modal-footer-sticky bg-white border-top shadow-sm py-3 px-4">
+                                        <div class="d-flex gap-2 w-100 justify-content-end">
+                                            <button type="button" class="btn btn-outline-secondary rounded-pill px-5 fw-bold" data-bs-dismiss="modal">
+                                                <i class="fas fa-times me-1"></i> إلغاء
+                                            </button>
+                                            <button type="submit" name="update_role" id="saveChangesBtn_<?php echo $rid; ?>" class="btn btn-primary rounded-pill px-6 fw-bold shadow-sm" disabled>
+                                                <i class="fas fa-save me-1"></i> حفظ التغييرات
+                                            </button>
+                                        </div>
                                     </div>
                                 </form>
                             </div>
@@ -636,9 +652,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                         <!-- Administrative Section -->
                         <div class="col-md-6">
                             <div class="card border-0 bg-light rounded-4 h-100">
-                                <div class="card-header bg-white border-0 py-3"><h6 class="fw-bold mb-0 text-primary"><i class="fas fa-user-shield me-2"></i> الإعدادات الإدارية</h6></div>
+                                <div class="card-header bg-white border-0 py-3 d-flex align-items-center justify-content-between">
+                                    <h6 class="fw-bold mb-0 text-primary"><i class="fas fa-user-shield me-2"></i> الإعدادات الإدارية</h6>
+                                    <div class="form-check form-switch m-0">
+                                        <input class="form-check-input editor-select-all" type="checkbox" id="editor_admin_select_all" data-section="editor_admin_group" style="cursor:pointer;">
+                                        <label class="form-check-label small fw-bold text-muted" for="editor_admin_select_all" style="cursor:pointer;">تحديد الكل</label>
+                                    </div>
+                                </div>
                                 <div class="card-body">
-                                    <div class="row g-2">
+                                    <div class="row g-2" id="editor_admin_group">
                                         <?php
                                         $editor_admin_list = [
                                             'allow_editor_users' => 'إدارة المستخدمين', 
@@ -655,7 +677,7 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                             <div class="col-12">
                                                 <label class="perm-card mb-2 <?php echo ($settings[$key] ?? 0) ? 'is-active' : ''; ?>" for="<?php echo $key; ?>">
                                                     <span class="perm-title"><?php echo $label; ?></span>
-                                                    <input class="form-check-input" type="checkbox" name="<?php echo $key; ?>" id="<?php echo $key; ?>" <?php echo ($settings[$key] ?? 0) ? 'checked' : ''; ?>>
+                                                    <input class="form-check-input perm-checkbox editor-perm-cb" type="checkbox" name="<?php echo $key; ?>" id="<?php echo $key; ?>" <?php echo ($settings[$key] ?? 0) ? 'checked' : ''; ?> data-original="<?php echo ($settings[$key] ?? 0) ? '1' : '0'; ?>">
                                                 </label>
                                             </div>
                                         <?php endforeach; ?>
@@ -667,9 +689,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                         <!-- Financial/Operations Section -->
                         <div class="col-md-6">
                             <div class="card border-0 bg-light rounded-4 h-100">
-                                <div class="card-header bg-white border-0 py-3"><h6 class="fw-bold mb-0 text-success"><i class="fas fa-file-invoice-dollar me-2"></i> الإعدادات المالية والتشغيلية</h6></div>
+                                <div class="card-header bg-white border-0 py-3 d-flex align-items-center justify-content-between">
+                                    <h6 class="fw-bold mb-0 text-success"><i class="fas fa-file-invoice-dollar me-2"></i> الإعدادات المالية والتشغيلية</h6>
+                                    <div class="form-check form-switch m-0">
+                                        <input class="form-check-input editor-select-all" type="checkbox" id="editor_finance_select_all" data-section="editor_finance_group" style="cursor:pointer;">
+                                        <label class="form-check-label small fw-bold text-muted" for="editor_finance_select_all" style="cursor:pointer;">تحديد الكل</label>
+                                    </div>
+                                </div>
                                 <div class="card-body">
-                                    <div class="row g-2">
+                                    <div class="row g-2" id="editor_finance_group">
                                         <?php
                                         $editor_finance_list = [
                                             'allow_editor_batches' => 'إدارة الدفعات', 
@@ -683,7 +711,7 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                             <div class="col-12">
                                                 <label class="perm-card mb-2 <?php echo ($settings[$key] ?? 0) ? 'is-active' : ''; ?>" for="<?php echo $key; ?>">
                                                     <span class="perm-title"><?php echo $label; ?></span>
-                                                    <input class="form-check-input" type="checkbox" name="<?php echo $key; ?>" id="<?php echo $key; ?>" <?php echo ($settings[$key] ?? 0) ? 'checked' : ''; ?>>
+                                                    <input class="form-check-input perm-checkbox editor-perm-cb" type="checkbox" name="<?php echo $key; ?>" id="<?php echo $key; ?>" <?php echo ($settings[$key] ?? 0) ? 'checked' : ''; ?> data-original="<?php echo ($settings[$key] ?? 0) ? '1' : '0'; ?>">
                                                 </label>
                                             </div>
                                         <?php endforeach; ?>
@@ -722,11 +750,14 @@ $active_tab = $_GET['info'] ?? 'roles_list';
 </div>
 
 <!-- Modal إضافة دور -->
-<div class="modal fade" id="addRoleModal" tabindex="-1">
-    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+<div class="modal fade role-edit-modal" id="addRoleModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content border-0 shadow-lg rounded-4">
+            <div class="modal-header bg-success text-white border-0 py-3">
+                <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة دور جديد</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
             <form method="POST">
-                <div class="modal-header bg-success text-white border-0 py-3"><h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة دور جديد</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
                 <div class="modal-body p-4 bg-light">
                     <div class="card border-0 shadow-sm rounded-4 mb-4 p-4">
                         <div class="row g-3">
@@ -740,11 +771,15 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                         <?php foreach ($permission_groups as $g_key => $group): ?>
                             <div class="col-12">
                                 <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
-                                    <div class="card-header bg-success text-white py-2 px-3">
+                                    <div class="card-header bg-success text-white py-2 px-3 d-flex align-items-center justify-content-between">
                                         <h6 class="mb-0 small fw-bold"><i class="fas <?php echo $group['icon']; ?> me-2"></i> <?php echo $group['title']; ?></h6>
+                                        <div class="form-check form-switch m-0">
+                                            <input class="form-check-input group-select-all-cb" type="checkbox" id="group_sel_add_<?php echo $g_key; ?>" data-accordion="#accordion_add_<?php echo $g_key; ?>" style="cursor:pointer;">
+                                            <label class="form-check-label small fw-bold ms-2" for="group_sel_add_<?php echo $g_key; ?>" style="cursor:pointer; font-size: 0.8rem;">تفعيل المجموعة كاملة</label>
+                                        </div>
                                     </div>
                                     <div class="card-body p-0">
-                                        <div class="accordion accordion-flush" id="accordion_add_<?php echo $g_key; ?>">
+                                        <div class="accordion accordion-flush perm-accordion-group" id="accordion_add_<?php echo $g_key; ?>" data-group-master="group_sel_add_<?php echo $g_key; ?>">
                                             <?php 
                                             $idx_g = 0;
                                             foreach ($group['categories'] as $cat):
@@ -755,13 +790,19 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                                             ?>
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header">
-                                                        <button class="accordion-button collapsed py-2 px-3 small fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#<?php echo $collapseId; ?>">
-                                                            <?php echo $cat_name; ?> <span class="badge bg-light text-success border rounded-pill ms-auto extra-small"><?php echo count($perms); ?></span>
-                                                        </button>
+                                                        <div class="d-flex align-items-center py-2 px-3" style="gap: 12px;">
+                                                            <div class="form-check form-switch m-0 p-0 select-all-wrapper" data-target="#<?php echo $collapseId; ?>">
+                                                                <input class="form-check-input select-all-cb" type="checkbox" id="select_all_add_<?php echo $g_key; ?>_<?php echo $idx_g; ?>" style="cursor:pointer;">
+                                                                <label class="form-check-label small fw-bold text-muted" for="select_all_add_<?php echo $g_key; ?>_<?php echo $idx_g; ?>" style="cursor:pointer;">تحديد الكل</label>
+                                                            </div>
+                                                            <button class="accordion-button collapsed small fw-bold flex-grow-1" type="button" data-bs-toggle="collapse" data-bs-target="#<?php echo $collapseId; ?>">
+                                                                <?php echo $cat_name; ?> <span class="badge bg-light text-success border rounded-pill ms-auto extra-small"><?php echo count($perms); ?></span>
+                                                            </button>
+                                                        </div>
                                                     </h2>
                                                     <div id="<?php echo $collapseId; ?>" class="accordion-collapse collapse" data-bs-parent="#accordion_add_<?php echo $g_key; ?>">
                                                         <div class="accordion-body p-3">
-                                                            <div class="row g-2">
+                                                            <div class="row g-2 perm-group" data-parent="select_all_add_<?php echo $g_key; ?>_<?php echo $idx_g; ?>">
                                                                 <?php foreach ($perms as $p): ?>
                                                                     <div class="col-md-4">
                                                                         <label class="perm-card mb-2" for="p_a_<?php echo $p['id']; ?>">
@@ -782,7 +823,16 @@ $active_tab = $_GET['info'] ?? 'roles_list';
                         <?php endforeach; ?>
                     </div>
                 </div>
-                <div class="modal-footer bg-white border-top-0 py-3"><button type="button" class="btn btn-light rounded-pill px-4" data-bs-dismiss="modal">إلغاء</button><button type="submit" name="add_role" class="btn btn-success rounded-pill px-5 fw-bold">إضافة الدور</button></div>
+                <div class="modal-footer modal-footer-sticky bg-white border-top shadow-sm py-3 px-4">
+                    <div class="d-flex gap-2 w-100 justify-content-end">
+                        <button type="button" class="btn btn-outline-secondary rounded-pill px-5 fw-bold" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-1"></i> إلغاء
+                        </button>
+                        <button type="submit" name="add_role" class="btn btn-success rounded-pill px-6 fw-bold shadow-sm">
+                            <i class="fas fa-plus-circle me-1"></i> إضافة الدور
+                        </button>
+                    </div>
+                </div>
             </form>
         </div>
     </div>
@@ -924,21 +974,479 @@ $active_tab = $_GET['info'] ?? 'roles_list';
     }
 
     .sticky-top { position: sticky; top: 0; z-index: 1020; }
+
+    /* ===== إصلاحات المودالات: ظهور الفوتر والأزرار ===== */
+    .role-edit-modal .modal-dialog {
+        max-height: 92vh !important;
+        margin: 1.5rem auto !important;
+    }
+
+    .role-edit-modal .modal-content {
+        max-height: 92vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+    }
+
+    .role-edit-modal .modal-header {
+        flex-shrink: 0 !important;
+        z-index: 5 !important;
+    }
+
+    .role-edit-modal form {
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        min-height: 0 !important;
+    }
+
+    .role-edit-modal .modal-body {
+        flex: 1 1 auto !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        max-height: calc(92vh - 180px) !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: thin !important;
+    }
+
+    .role-edit-modal .modal-body::-webkit-scrollbar {
+        width: 10px;
+    }
+    .role-edit-modal .modal-body::-webkit-scrollbar-track {
+        background: rgba(0,0,0,0.05);
+    }
+    .role-edit-modal .modal-body::-webkit-scrollbar-thumb {
+        background: rgba(59, 130, 246, 0.5);
+        border-radius: 5px;
+    }
+
+    .modal-footer-sticky {
+        flex-shrink: 0 !important;
+        position: sticky !important;
+        bottom: 0 !important;
+        z-index: 10 !important;
+        border-top: 2px solid rgba(0,0,0,0.08) !important;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.98), #ffffff) !important;
+    }
+
+    .modal-footer-sticky .btn {
+        min-width: 150px !important;
+        padding-top: 0.65rem !important;
+        padding-bottom: 0.65rem !important;
+    }
+
+    @media (max-width: 768px) {
+        .role-edit-modal .modal-dialog {
+            max-height: 96vh !important;
+            margin: 0.5rem !important;
+        }
+        .role-edit-modal .modal-content {
+            max-height: 96vh !important;
+        }
+        .role-edit-modal .modal-body {
+            max-height: calc(96vh - 180px) !important;
+        }
+        .modal-footer-sticky .btn {
+            min-width: auto !important;
+            width: 100% !important;
+        }
+        .modal-footer-sticky > div {
+            flex-direction: column-reverse !important;
+            width: 100% !important;
+        }
+    }
+
+    /* ===== دعم الوضع الليلي للمودالات ===== */
+    body.theme-dark .role-edit-modal .modal-content {
+        background: #1e293b !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-body {
+        background: #0f172a !important;
+        color: #e2e8f0 !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-body h6,
+    body.theme-dark .role-edit-modal .modal-body label.form-label {
+        color: #f1f5f9 !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-footer-sticky {
+        background: linear-gradient(to bottom, rgba(30,41,59,0.98), #1e293b) !important;
+        border-top-color: rgba(148, 163, 184, 0.15) !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-footer-sticky .btn.btn-primary {
+        background-color: #38bdf8 !important;
+        border-color: #38bdf8 !important;
+        color: #0f172a !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-footer-sticky .btn.btn-success {
+        background-color: #34d399 !important;
+        border-color: #34d399 !important;
+        color: #0f172a !important;
+    }
+
+    body.theme-dark .role-edit-modal .modal-footer-sticky .btn.btn-outline-secondary {
+        border-color: rgba(148, 163, 184, 0.4) !important;
+        color: #cbd5e1 !important;
+    }
+    body.theme-dark .role-edit-modal .modal-footer-sticky .btn.btn-outline-secondary:hover {
+        background-color: rgba(148, 163, 184, 0.1) !important;
+    }
+
+    body.theme-dark .role-edit-modal .card-header.bg-primary {
+        background-color: #1d4ed8 !important;
+    }
+    body.theme-dark .role-edit-modal .card-header.bg-success {
+        background-color: #047857 !important;
+    }
+    body.theme-dark .role-edit-modal .bg-light {
+        background-color: #1e293b !important;
+    }
+    body.theme-dark .role-edit-modal .card {
+        background: #1e293b !important;
+        border: 1px solid rgba(148, 163, 184, 0.1) !important;
+    }
+    body.theme-dark .role-edit-modal .accordion-button {
+        background-color: #1e293b !important;
+        color: #e2e8f0 !important;
+    }
+    body.theme-dark .role-edit-modal .accordion-button:not(.collapsed) {
+        background-color: #0f172a !important;
+        color: #38bdf8 !important;
+    }
+    body.theme-dark .role-edit-modal .accordion-body {
+        background-color: #0f172a !important;
+    }
+    body.theme-dark .role-edit-modal .accordion-item {
+        border-color: rgba(148, 163, 184, 0.1) !important;
+    }
+
+    /* ===== تأثير ظهور الأزرار عند التفعيل ===== */
+    #saveChangesBtn_\31 {
+        transition: all 0.3s ease !important;
+    }
+    [id^="saveChangesBtn_"] {
+        transition: all 0.3s ease !important;
+    }
+    [id^="saveChangesBtn_"]:not(:disabled) {
+        animation: pulse-glow 1.5s ease-in-out infinite !important;
+    }
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+        50%      { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+    }
+
+    .form-check-input.select-all-cb,
+    .form-check-input.group-select-all-cb,
+    .form-check-input.editor-select-all {
+        width: 42px !important;
+        height: 22px !important;
+        cursor: pointer !important;
+    }
+    .form-check-input.select-all-cb:checked,
+    .form-check-input.group-select-all-cb:checked,
+    .form-check-input.editor-select-all:checked {
+        background-color: #22c55e !important;
+        border-color: #22c55e !important;
+    }
 </style>
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+
+        function updateCardState(cb) {
+            const card = cb.closest('.perm-card');
+            if (card) {
+                if (cb.checked) {
+                    card.classList.add('is-active');
+                } else {
+                    card.classList.remove('is-active');
+                }
+            }
+        }
+
+        function updateSelectAllState(selectAllCbId) {
+            const groupEl = document.querySelector('[data-parent="' + selectAllCbId + '"]');
+            if (!groupEl) return;
+            const cbs = groupEl.querySelectorAll('.perm-checkbox');
+            if (cbs.length === 0) return;
+            const allChecked = Array.from(cbs).every(cb => cb.checked);
+            const someChecked = Array.from(cbs).some(cb => cb.checked);
+            const selectAllCb = document.getElementById(selectAllCbId);
+            if (selectAllCb) {
+                selectAllCb.checked = allChecked;
+                selectAllCb.indeterminate = (!allChecked && someChecked);
+            }
+        }
+
+        function updateGroupSelectAllState(accordionId) {
+            const accordion = document.getElementById(accordionId);
+            if (!accordion) return;
+            const masterId = accordion.getAttribute('data-group-master');
+            if (!masterId) return;
+            const allPermCbs = accordion.querySelectorAll('.perm-checkbox');
+            if (allPermCbs.length === 0) return;
+            const allChecked = Array.from(allPermCbs).every(cb => cb.checked);
+            const someChecked = Array.from(allPermCbs).some(cb => cb.checked);
+            const masterCb = document.getElementById(masterId);
+            if (masterCb) {
+                masterCb.checked = allChecked;
+                masterCb.indeterminate = (!allChecked && someChecked);
+            }
+        }
+
+        function updateCategorySelectAllsInAccordion(accordionId, isChecked) {
+            const accordion = document.getElementById(accordionId);
+            if (!accordion) return;
+            const catSelectAlls = accordion.querySelectorAll('.select-all-cb');
+            catSelectAlls.forEach(cb => {
+                cb.checked = isChecked;
+                cb.indeterminate = false;
+            });
+        }
+
+        function checkEditModalChanges(rid) {
+            const modal = document.getElementById('editRoleModal' + rid);
+            if (!modal) return false;
+            const cbs = modal.querySelectorAll('.perm-checkbox[data-original]');
+            let hasChanged = false;
+            cbs.forEach(cb => {
+                const original = cb.getAttribute('data-original') === '1';
+                if (cb.checked !== original) {
+                    hasChanged = true;
+                }
+            });
+            const allInputs = modal.querySelectorAll('input[name="display_name"], input[name="description"], input[name="max_discount_percentage"]');
+            allInputs.forEach(inp => {
+                if (inp.defaultValue !== undefined && inp.value !== inp.defaultValue) {
+                    hasChanged = true;
+                }
+            });
+            return hasChanged;
+        }
+
+        function updateSaveBtnState(rid) {
+            const saveBtn = document.getElementById('saveChangesBtn_' + rid);
+            if (!saveBtn) return;
+            const hasChanged = checkEditModalChanges(rid);
+            if (hasChanged) {
+                saveBtn.disabled = false;
+                saveBtn.classList.remove('btn-primary');
+                saveBtn.classList.add('btn-warning');
+                if (!saveBtn.querySelector('.change-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'change-badge badge bg-white text-warning ms-2 rounded-pill';
+                    badge.textContent = 'تم التعديل';
+                    saveBtn.appendChild(badge);
+                }
+            } else {
+                saveBtn.disabled = true;
+                saveBtn.classList.remove('btn-warning');
+                saveBtn.classList.add('btn-primary');
+                const badge = saveBtn.querySelector('.change-badge');
+                if (badge) badge.remove();
+            }
+        }
+
+        function checkEditorChanges() {
+            const editorTab = document.getElementById('editor_perms');
+            if (!editorTab) return false;
+            const cbs = editorTab.querySelectorAll('.editor-perm-cb');
+            let hasChanged = false;
+            cbs.forEach(cb => {
+                const original = cb.getAttribute('data-original') === '1';
+                if (cb.checked !== original) {
+                    hasChanged = true;
+                }
+            });
+            return hasChanged;
+        }
+
+        function updateEditorSaveBtn() {
+            const saveBtn = document.querySelector('button[name="save_editor_permissions"]');
+            if (!saveBtn) return;
+            const hasChanged = checkEditorChanges();
+            if (hasChanged) {
+                saveBtn.classList.remove('btn-primary');
+                saveBtn.classList.add('btn-warning');
+                if (!saveBtn.querySelector('.change-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'change-badge badge bg-white text-warning ms-2 rounded-pill';
+                    badge.textContent = 'تم التعديل';
+                    saveBtn.appendChild(badge);
+                }
+            } else {
+                saveBtn.classList.remove('btn-warning');
+                saveBtn.classList.add('btn-primary');
+                const badge = saveBtn.querySelector('.change-badge');
+                if (badge) badge.remove();
+            }
+        }
+
         document.querySelectorAll('.perm-checkbox').forEach(cb => {
             cb.addEventListener('change', function() {
-                const card = this.closest('.perm-card');
-                if (this.checked) { 
-                    card.classList.add('is-active');
+                updateCardState(this);
+                const parentGroup = this.closest('[data-parent]');
+                if (parentGroup) {
+                    const parentId = parentGroup.getAttribute('data-parent');
+                    if (parentId) updateSelectAllState(parentId);
                 }
-                else { 
-                    card.classList.remove('is-active');
+                const parentAccordion = this.closest('.perm-accordion-group');
+                if (parentAccordion) {
+                    updateGroupSelectAllState(parentAccordion.id);
+                }
+                const editorGroup = this.closest('#editor_admin_group, #editor_finance_group');
+                if (editorGroup) {
+                    const allCb = document.querySelector('.editor-select-all[data-section="' + editorGroup.id + '"]');
+                    if (allCb) {
+                        const groupCbs = editorGroup.querySelectorAll('.perm-checkbox');
+                        const allChecked = Array.from(groupCbs).every(c => c.checked);
+                        const someChecked = Array.from(groupCbs).some(c => c.checked);
+                        allCb.checked = allChecked;
+                        allCb.indeterminate = (!allChecked && someChecked);
+                    }
+                    updateEditorSaveBtn();
+                }
+                const editModal = this.closest('[id^="editRoleModal"]');
+                if (editModal) {
+                    const rid = editModal.id.replace('editRoleModal', '');
+                    updateSaveBtnState(rid);
                 }
             });
         });
+
+        document.querySelectorAll('.select-all-cb').forEach(saCb => {
+            saCb.addEventListener('change', function() {
+                const saId = this.id;
+                const targetGroup = document.querySelector('[data-parent="' + saId + '"]');
+                if (!targetGroup) return;
+                const cbs = targetGroup.querySelectorAll('.perm-checkbox');
+                const isChecked = this.checked;
+                cbs.forEach(cb => {
+                    cb.checked = isChecked;
+                    updateCardState(cb);
+                });
+                this.indeterminate = false;
+                const parentAccordion = this.closest('.perm-accordion-group');
+                if (parentAccordion) {
+                    updateGroupSelectAllState(parentAccordion.id);
+                }
+                const editModal = this.closest('[id^="editRoleModal"]');
+                if (editModal) {
+                    const rid = editModal.id.replace('editRoleModal', '');
+                    updateSaveBtnState(rid);
+                }
+            });
+        });
+
+        document.querySelectorAll('.group-select-all-cb').forEach(gsaCb => {
+            gsaCb.addEventListener('change', function() {
+                const accordionSel = this.getAttribute('data-accordion');
+                if (!accordionSel) return;
+                const accordion = document.querySelector(accordionSel);
+                if (!accordion) return;
+                const isChecked = this.checked;
+                this.indeterminate = false;
+                updateCategorySelectAllsInAccordion(accordion.id, isChecked);
+                const permCbs = accordion.querySelectorAll('.perm-checkbox');
+                permCbs.forEach(cb => {
+                    cb.checked = isChecked;
+                    updateCardState(cb);
+                });
+                const editModal = this.closest('[id^="editRoleModal"]');
+                if (editModal) {
+                    const rid = editModal.id.replace('editRoleModal', '');
+                    updateSaveBtnState(rid);
+                }
+            });
+        });
+
+        document.querySelectorAll('.editor-select-all').forEach(saCb => {
+            saCb.addEventListener('change', function() {
+                const sectionId = this.getAttribute('data-section');
+                const section = document.getElementById(sectionId);
+                if (!section) return;
+                const cbs = section.querySelectorAll('.perm-checkbox');
+                const isChecked = this.checked;
+                cbs.forEach(cb => {
+                    cb.checked = isChecked;
+                    updateCardState(cb);
+                });
+                this.indeterminate = false;
+                updateEditorSaveBtn();
+            });
+        });
+
+        function initEditorSelectAll() {
+            ['editor_admin_group', 'editor_finance_group'].forEach(gid => {
+                const group = document.getElementById(gid);
+                if (!group) return;
+                const allCb = document.querySelector('.editor-select-all[data-section="' + gid + '"]');
+                if (!allCb) return;
+                const cbs = group.querySelectorAll('.perm-checkbox');
+                const allChecked = Array.from(cbs).every(c => c.checked);
+                const someChecked = Array.from(cbs).some(c => c.checked);
+                allCb.checked = allChecked;
+                allCb.indeterminate = (!allChecked && someChecked);
+            });
+        }
+
+        function initPermGroupSelectAll() {
+            document.querySelectorAll('.perm-group[data-parent]').forEach(group => {
+                const parentId = group.getAttribute('data-parent');
+                const cbs = group.querySelectorAll('.perm-checkbox');
+                const allCb = document.getElementById(parentId);
+                if (!allCb || cbs.length === 0) return;
+                const allChecked = Array.from(cbs).every(c => c.checked);
+                const someChecked = Array.from(cbs).some(c => c.checked);
+                allCb.checked = allChecked;
+                allCb.indeterminate = (!allChecked && someChecked);
+            });
+        }
+
+        function initGroupMasterSelectAll() {
+            document.querySelectorAll('.perm-accordion-group').forEach(acc => {
+                updateGroupSelectAllState(acc.id);
+            });
+        }
+
+        function initFormDefaults() {
+            document.querySelectorAll('[id^="editRoleModal"] input[name="display_name"], [id^="editRoleModal"] input[name="description"], [id^="editRoleModal"] input[name="max_discount_percentage"]').forEach(inp => {
+                inp.defaultValue = inp.value;
+                inp.addEventListener('input', function() {
+                    const editModal = this.closest('[id^="editRoleModal"]');
+                    if (editModal) {
+                        const rid = editModal.id.replace('editRoleModal', '');
+                        updateSaveBtnState(rid);
+                    }
+                });
+            });
+        }
+
+        document.querySelectorAll('[id^="editRoleModal"]').forEach(modal => {
+            modal.addEventListener('shown.bs.modal', function() {
+                const rid = this.id.replace('editRoleModal', '');
+                initPermGroupSelectAll();
+                initGroupMasterSelectAll();
+                initFormDefaults();
+                updateSaveBtnState(rid);
+            });
+        });
+
+        document.getElementById('addRoleModal').addEventListener('shown.bs.modal', function() {
+            initPermGroupSelectAll();
+            initGroupMasterSelectAll();
+        });
+
+        initEditorSelectAll();
+        initPermGroupSelectAll();
+        initGroupMasterSelectAll();
+        initFormDefaults();
+
+        document.querySelectorAll('.perm-checkbox').forEach(cb => updateCardState(cb));
     });
 </script>
 

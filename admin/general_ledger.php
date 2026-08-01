@@ -68,6 +68,22 @@ $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $transactions = $stmt->fetchAll();
 
+// Function to calculate opening balance per account
+function get_account_opening_balance($pdo, $account_id, $from_date)
+{
+    $stmt = $pdo->prepare("
+        SELECT 
+            COALESCE(SUM(jl.debit * COALESCE(ft.exchange_rate, 1)), 0) as total_debit,
+            COALESCE(SUM(jl.credit * COALESCE(ft.exchange_rate, 1)), 0) as total_credit
+        FROM journal_lines jl
+        LEFT JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
+        WHERE jl.account_id = ? AND ft.transaction_date < ? AND ft.status = 'posted'
+    ");
+    $stmt->execute([$account_id, $from_date]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $result['total_debit'] - $result['total_credit'];
+}
+
 $currencies = $pdo->query("SELECT id, currency_name, currency_code FROM currencies WHERE is_active = 1")->fetchAll();
 
 $page_title = "اليومية العامة";
@@ -155,6 +171,62 @@ require_once 'header.php';
             </form>
         </div>
     </div>
+
+    <!-- ملخص الحساب (إذا تم اختيار حساب محدد) -->
+    <?php if ($specific_account_id > 0): 
+        // Get account details if a specific account is selected
+        $acc_stmt = $pdo->prepare("SELECT * FROM unified_accounts WHERE id = ?");
+        $acc_stmt->execute([$specific_account_id]);
+        $account = $acc_stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($account):
+            $opening_balance = get_account_opening_balance($pdo, $account['id'], $from_date);
+            
+            // Calculate period totals for this specific account
+            $period_debit = 0;
+            $period_credit = 0;
+            foreach ($transactions as $tx) {
+                $period_debit += $tx['debit_amount'];
+                $period_credit += $tx['credit_amount'];
+            }
+            $closing_balance = $opening_balance + $period_debit - $period_credit;
+    ?>
+        <div class="card border-0 shadow-sm rounded-4 mb-4">
+            <div class="card-header bg-light rounded-top-4 d-flex justify-content-between align-items-center">
+                <h5 class="fw-bold mb-0">
+                    <span class="text-muted small me-2"><?php echo htmlspecialchars($account['account_code']); ?></span>
+                    <?php echo htmlspecialchars($account['account_name_ar']); ?>
+                </h5>
+                <div class="text-muted small">
+                    ملخص الفترة من <?php echo htmlspecialchars($from_date); ?> إلى <?php echo htmlspecialchars($to_date); ?>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="row g-0 border-bottom">
+                    <div class="col-md-3 p-3 bg-light border-end text-center">
+                        <div class="text-muted small mb-1">الرصيد الافتتاحي</div>
+                        <div class="fw-bold <?php echo $opening_balance >= 0 ? 'text-success' : 'text-danger'; ?>">
+                            <?php echo number_format($opening_balance, 2); ?> <?php echo $opening_balance >= 0 ? 'مدين' : 'دائن'; ?>
+                        </div>
+                    </div>
+                    <div class="col-md-3 p-3 bg-light border-end text-center">
+                        <div class="text-muted small mb-1">إجمالي المدين في الفترة</div>
+                        <div class="fw-bold text-success"><?php echo number_format($period_debit, 2); ?></div>
+                    </div>
+                    <div class="col-md-3 p-3 bg-light border-end text-center">
+                        <div class="text-muted small mb-1">إجمالي الدائن في الفترة</div>
+                        <div class="fw-bold text-danger"><?php echo number_format($period_credit, 2); ?></div>
+                    </div>
+                    <div class="col-md-3 p-3 bg-light text-center">
+                        <div class="text-muted small mb-1">الرصيد الختامي</div>
+                        <div class="fw-bold <?php echo $closing_balance >= 0 ? 'text-success' : 'text-danger'; ?>">
+                            <?php echo number_format($closing_balance, 2); ?> <?php echo $closing_balance >= 0 ? 'مدين' : 'دائن'; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    <?php endif; endif; ?>
 
     <!-- جدول القيود -->
     <div class="card border-0 shadow-sm rounded-4">

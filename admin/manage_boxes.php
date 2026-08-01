@@ -13,8 +13,15 @@ if (!has_permission('manage_financial_accounts')) {
     exit();
 }
 
+if (isset($_GET['deactivate']) || isset($_GET['delete_permanent'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إضافة صندوق جديد
 if (isset($_POST['add_box_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_boxes.php';</script>");
+    }
     $account_name = $_POST['account_name'];
     $parent_id = $_POST['parent_id'];
     $branch_id = $_POST['branch_id'] ?: null;
@@ -71,6 +78,9 @@ if (isset($_POST['add_box_account'])) {
 
 // تحديث الصندوق
 if (isset($_POST['update_box_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_boxes.php';</script>");
+    }
     $id = $_POST['id'];
     $account_name = $_POST['account_name'];
     $branch_id = $_POST['branch_id'] ?: null;
@@ -106,9 +116,12 @@ if (isset($_POST['update_box_account'])) {
     }
 }
 
-// تحويل إلى خامل
-if (isset($_GET['deactivate'])) {
-    $id = (int)$_GET['deactivate'];
+// تحويل إلى خامل عبر POST + CSRF
+if (isset($_POST['deactivate_account'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_boxes.php';</script>");
+    }
+    $id = (int)$_POST['deactivate_account'];
     try {
         $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
         $stmt->execute([$id]);
@@ -119,9 +132,12 @@ if (isset($_GET['deactivate'])) {
     }
 }
 
-// حذف نهائي
-if (isset($_GET['delete_permanent'])) {
-    $id = (int)$_GET['delete_permanent'];
+// حذف نهائي عبر POST + CSRF
+if (isset($_POST['delete_account_permanent'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='manage_boxes.php';</script>");
+    }
+    $id = (int)$_POST['delete_account_permanent'];
     try {
         $pdo->beginTransaction();
         
@@ -186,10 +202,20 @@ $balances = [];
 if (!empty($box_ids)) {
     $placeholders = implode(',', array_fill(0, count($box_ids), '?'));
     $bal_stmt = $pdo->prepare("
-        SELECT ab.*, c.currency_name, c.currency_symbol 
-        FROM account_balances_unified ab 
-        JOIN currencies c ON ab.currency_id = c.id 
-        WHERE ab.account_id IN ($placeholders)
+        SELECT
+            jl.account_id,
+            jl.currency_id,
+            c.currency_name,
+            c.currency_symbol,
+            c.currency_code,
+            SUM(jl.debit - jl.credit) AS net_balance,
+            SUM((jl.debit - jl.credit) * COALESCE(c.exchange_rate, 1)) AS net_balance_base
+        FROM journal_lines jl
+        JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
+        LEFT JOIN currencies c ON jl.currency_id = c.id
+        WHERE ft.status = 'posted' AND jl.account_id IN ($placeholders)
+        GROUP BY jl.account_id, jl.currency_id, c.currency_name, c.currency_symbol, c.currency_code
+        ORDER BY jl.account_id ASC, c.currency_name ASC
     ");
     $bal_stmt->execute($box_ids);
     while ($row = $bal_stmt->fetch()) {
@@ -203,7 +229,7 @@ if (!empty($boxes)) {
     foreach ($boxes as $b) {
         if (isset($balances[$b['id']])) {
             foreach ($balances[$b['id']] as $bal) {
-                $total_balance += (float)$bal['current_balance'];
+                $total_balance += (float)$bal['net_balance_base'];
                 if (!$currency_name) $currency_name = $bal['currency_name'];
             }
         }
@@ -305,7 +331,7 @@ $page_title = "إدارة الصناديق";
                                 <?php 
                                 if (isset($balances[$box['id']])) {
                                     foreach ($balances[$box['id']] as $bal) {
-                                        echo '<div class="mb-1 small">' . format_account_balance($bal['current_balance'], $box['normal_balance'], $bal['currency_name']) . '</div>';
+                                        echo '<div class="mb-1 small">' . format_account_balance($bal['net_balance'], $box['normal_balance'], $bal['currency_name']) . '</div>';
                                     }
                                 } else {
                                     echo '<span class="text-muted small">0.00</span>';
@@ -326,14 +352,16 @@ $page_title = "إدارة الصناديق";
                                             data-branch="<?php echo $box['branch_id']; ?>"
                                             data-status="<?php echo $box['account_status']; ?>"
                                             title="تعديل"><i class="fas fa-edit text-warning"></i></button>
-                                    <a href="manage_boxes.php?deactivate=<?php echo $box['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من تحويل هذا الصندوق إلى خامل؟')"
-                                       title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></a>
-                                    <a href="manage_boxes.php?delete_permanent=<?php echo $box['id']; ?>" 
-                                       class="btn btn-sm btn-light border-0" 
-                                       onclick="return confirm('هل أنت متأكد من حذف هذا الصندوق نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')"
-                                       title="حذف نهائي"><i class="fas fa-trash text-danger"></i></a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من تحويل هذا الصندوق إلى خامل؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="deactivate_account" value="<?php echo $box['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="تحويل إلى خامل"><i class="fas fa-pause text-secondary"></i></button>
+                                    </form>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الصندوق نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه!')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_account_permanent" value="<?php echo $box['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف نهائي"><i class="fas fa-trash text-danger"></i></button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -350,6 +378,7 @@ $page_title = "إدارة الصناديق";
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-success text-white border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة صندوق جديد</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -415,6 +444,7 @@ $page_title = "إدارة الصناديق";
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-header bg-warning text-dark border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل بيانات الصندوق</h5>

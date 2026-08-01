@@ -42,7 +42,38 @@ $settings = getSettings($pdo);
 // Fetch auxiliary data
 $cities = $pdo->query("SELECT id, city_name FROM cities ORDER BY city_name ASC")->fetchAll();
 $currencies = $pdo->query("SELECT id, currency_name, currency_symbol, is_default, exchange_rate, exchange_rate_buy, exchange_rate_sell FROM currencies WHERE is_active = 1 ORDER BY currency_name ASC")->fetchAll();
-$passport_types = $pdo->query("SELECT id, type_name, default_cost, default_sale_price, currency_id FROM passport_transaction_types WHERE is_active = 1 ORDER BY type_name ASC")->fetchAll();
+
+// Get service id for "جوازت السفر"
+$passportService = $pdo->prepare("SELECT id FROM services WHERE service_name = ? LIMIT 1");
+$passportService->execute(['جوازت السفر']);
+$passportServiceId = $passportService->fetchColumn();
+
+$passport_types = $pdo->prepare("SELECT id, type_name, default_cost, default_sale_price, currency_id, print_terms, service_id FROM passport_transaction_types WHERE is_active = 1 AND (service_id = ? OR service_id IS NULL) ORDER BY type_name ASC");
+$passport_types->execute([$passportServiceId]);
+$passport_types = $passport_types->fetchAll();
+
+// جلب الموردين مع أكواد حساباتهم مثل شاشة الإضافة
+$parent_stmt_suppliers = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_code = '21101'");
+$parent_stmt_suppliers->execute();
+$suppliers_parent_id = $parent_stmt_suppliers->fetchColumn();
+
+if ($suppliers_parent_id) {
+    $suppliers_stmt = $pdo->prepare("
+        SELECT coa.*, s.id as supplier_id, s.supplier_name, coa.id as account_id
+        FROM unified_accounts coa
+        LEFT JOIN suppliers s ON s.account_id = coa.id
+        WHERE coa.parent_id = ? AND (coa.account_status = 'active' OR coa.account_status = 'dormant')
+        ORDER BY coa.account_code ASC
+    ");
+    $suppliers_stmt->execute([$suppliers_parent_id]);
+    $suppliers_with_codes = $suppliers_stmt->fetchAll();
+    foreach ($suppliers_with_codes as &$s) {
+        $s['display_name'] = $s['account_code'] . ' - ' . $s['account_name_ar'];
+    }
+    unset($s);
+} else {
+    $suppliers_with_codes = [];
+}
 
 // Get entities for financial logic (similar to invoices.php)
 $customers_entities = $pdo->query("
@@ -128,7 +159,7 @@ foreach($invoices as $inv) {
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label small fw-bold">تاريخ الميلاد</label>
-                                <input type="date" class="form-control rounded-3" name="date_of_birth" value="<?php echo $trx['date_of_birth']; ?>">
+                                <input type="date" class="form-control rounded-3" name="date_of_birth" value="<?php echo $trx['date_of_birth']; ?>" max="<?php echo date('Y-m-d'); ?>">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label small fw-bold">نوع الهوية</label>
@@ -162,7 +193,7 @@ foreach($invoices as $inv) {
                             <div class="col-md-6">
                                 <label class="form-label small fw-bold">تاريخ السفر</label>
                                 <div class="input-group">
-                                    <input type="date" class="form-control rounded-start-3" name="travel_date" id="travel_date" value="<?php echo $trx['travel_date'] ?? ''; ?>">
+                                    <input type="date" class="form-control rounded-start-3" name="travel_date" id="travel_date" value="<?php echo $trx['travel_date'] ?? ''; ?>" min="<?php echo date('Y-m-d'); ?>">
                                     <span class="input-group-text bg-light border-start-0 rounded-end-3 fw-bold text-primary" id="travel_day_name" style="min-width: 100px; justify-content: center;">---</span>
                                 </div>
                             </div>
@@ -255,177 +286,53 @@ foreach($invoices as $inv) {
                     <div class="card-body">
                         <div class="row g-3">
                             <input type="hidden" name="transaction_number" value="<?php echo htmlspecialchars($trx['transaction_number']); ?>">
-                            
-                            <div class="col-md-6">
+                            <input type="hidden" name="service_id" id="passport_service_id" value="<?php echo (int)$passportServiceId; ?>">
+
+                            <div class="col-md-12">
                                 <label class="form-label small fw-bold text-primary">نوع المعاملة (التسعيرة) <span class="text-danger">*</span></label>
-                                <select class="form-select rounded-3 border-primary" name="transaction_type_id" id="transaction_type_id" required>
-                                    <option value="">اختر نوع المعاملة...</option>
+                                <select class="form-select rounded-3 border-primary select2-financial" name="transaction_type_id[]" id="transaction_type_id" multiple required>
                                     <?php foreach($passport_types as $type): ?>
                                         <option value="<?php echo $type['id']; ?>" 
                                                 data-cost="<?php echo $type['default_cost']; ?>" 
                                                 data-sale="<?php echo $type['default_sale_price']; ?>"
                                                 data-currency="<?php echo $type['currency_id']; ?>"
+                                                data-terms="<?php echo htmlspecialchars($type['print_terms'] ?? ''); ?>"
+                                                data-service-id="<?php echo $type['service_id'] ?? ''; ?>"
                                                 <?php echo $trx['transaction_type_id'] == $type['id'] ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($type['type_name']); ?>
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label small fw-bold">تاريخ العملية <span class="text-danger">*</span></label>
-                                <input type="date" class="form-control rounded-3" name="operation_date" value="<?php echo $trx['operation_date']; ?>" required>
-                            </div>
+                        </div>
 
-                            <div class="col-md-4">
-                                <label class="form-label small fw-bold">عملة البيع <span class="text-danger">*</span></label>
-                                <select name="sale_currency_id" id="sale_currency_id" class="form-select select2-financial">
-                                    <?php foreach ($currencies as $curr): ?>
-                                        <option value="<?php echo $curr['id']; ?>" 
-                                                data-symbol="<?php echo $curr['currency_symbol']; ?>" 
-                                                data-buy="<?php echo $curr['exchange_rate_buy'] ?? 1; ?>" 
-                                                data-sell="<?php echo $curr['exchange_rate_sell'] ?? 1; ?>" 
-                                                data-rate="<?php echo $curr['exchange_rate'] ?? 1; ?>"
-                                                <?php echo ($sales_invoice ? $sales_invoice['currency_id'] : ($curr['is_default'])) == $curr['id'] ? 'selected' : ''; ?>>
-                                            <?php echo $curr['currency_name']; ?> (<?php echo $curr['currency_symbol']; ?>)
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
+                        <?php
+                        $current_invoice = [
+                            'invoice_date' => normalize_datetime_db($trx['operation_date'] ?? null),
+                            'branch_id' => $trx['branch_id'] ?? ($_SESSION['branch_id'] ?? null),
+                            'source_type' => 'معاملات جوازات',
+                            'delivery_type' => $sales_invoice['delivery_type'] ?? ($settings['default_delivery_type'] ?? 'draft'),
+                            'total_amount' => $sales_invoice['total_amount'] ?? 0,
+                            'discount' => $sales_invoice['discount'] ?? 0,
+                            'cost_amount' => $purchase_invoice['total_amount'] ?? ($sales_invoice['cost_amount'] ?? 0),
+                            'received_amount' => $sales_invoice['amount_received'] ?? 0,
+                            'record_purchase' => $purchase_invoice ? 1 : 0,
+                            'currency_id' => $purchase_invoice['currency_id'] ?? ($sales_invoice['currency_id'] ?? 1),
+                            'sale_currency_id' => $sales_invoice['currency_id'] ?? 1,
+                            'supplier_id' => $purchase_invoice['supplier_id'] ?? ($sales_invoice['supplier_id'] ?? null),
+                            'account_id' => $sales_invoice['account_id'] ?? null,
+                            'customer_id' => $sales_invoice['customer_id'] ?? null,
+                            'agent_id' => $sales_invoice['agent_id'] ?? null,
+                            'description' => $trx['description'] ?? ''
+                        ];
+                        $financial_fields_show_service_select = false;
+                        $financial_fields_header_layout = 'split_rows';
+                        $financial_fields_title_layout = 'block';
+                        $financial_fields_hide_service_accounts = true;
+                        include '../includes/financial_fields.php';
+                        ?>
 
-                            <div class="col-md-4">
-                                <label class="form-label small fw-bold text-primary">سعر البيع <span class="text-danger">*</span></label>
-                                <input type="number" step="0.01" name="sale_price" id="sale_price" class="form-control fw-bold text-primary" value="<?php echo $sales_invoice ? $sales_invoice['total_amount'] : '0.00'; ?>" required>
-                                <div id="sale_price_equivalent_hint" class="extra-small text-muted mt-1 fw-bold" style="display:none;"></div>
-                            </div>
-                            <div class="col-md-4" <?php echo ($settings['passport_allow_discount'] ?? 1) ? '' : 'style="display:none;"'; ?>>
-                                <label class="form-label small fw-bold text-danger">الخصم</label>
-                                <input type="number" step="0.01" name="discount" id="discount" class="form-control" value="<?php echo $sales_invoice ? $sales_invoice['discount_amount'] : '0.00'; ?>">
-                            </div>
-
-                            <hr class="my-2">
-
-                            <div class="col-md-4" id="supplier_select_div">
-                                <label class="form-label small fw-bold text-danger">المورد <span class="text-danger">*</span></label>
-                                <select class="form-select select2-financial" name="supplier_id" id="supplier_id">
-                                    <option value="">اختر المورد...</option>
-                                    <?php 
-                                    $suppliers = $pdo->query("SELECT id, supplier_name FROM suppliers WHERE deleted_at IS NULL ORDER BY supplier_name ASC")->fetchAll();
-                                    foreach($suppliers as $sup): 
-                                    ?>
-                                        <option value="<?php echo $sup['id']; ?>" <?php echo ($purchase_invoice && $purchase_invoice['supplier_id'] == $sup['id']) ? 'selected' : ''; ?>><?php echo htmlspecialchars($sup['supplier_name']); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-
-                            <div class="col-md-4">
-                                <label class="form-label small fw-bold text-muted">عملة التكلفة</label>
-                                <select name="currency_id" id="main_currency_id" class="form-select select2-financial">
-                                    <?php foreach ($currencies as $curr): ?>
-                                        <option value="<?php echo $curr['id']; ?>" 
-                                                data-symbol="<?php echo $curr['currency_symbol']; ?>" 
-                                                data-buy="<?php echo $curr['exchange_rate_buy'] ?? 1; ?>" 
-                                                data-sell="<?php echo $curr['exchange_rate_sell'] ?? 1; ?>" 
-                                                data-rate="<?php echo $curr['exchange_rate'] ?? 1; ?>"
-                                                <?php echo ($purchase_invoice ? $purchase_invoice['currency_id'] : ($curr['is_default'])) == $curr['id'] ? 'selected' : ''; ?>>
-                                            <?php echo $curr['currency_name']; ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-
-                            <div class="col-md-4">
-                                <label class="form-label small fw-bold text-warning">سعر التكلفة <span class="text-danger">*</span></label>
-                                <input type="number" step="0.01" name="purchase_price" id="purchase_price" class="form-control fw-bold text-warning" value="<?php echo $purchase_invoice ? $purchase_invoice['total_amount'] : ($sales_invoice ? $sales_invoice['cost_amount'] : '0.00'); ?>" required>
-                                <div id="cost_price_equivalent_hint" class="extra-small text-muted mt-1 fw-bold" style="display:none;"></div>
-                            </div>
-
-                            <!-- سعر الصرف (يظهر عند اختلاف العملات) -->
-                            <div class="col-12" id="exchange_rate_container" style="display: none;">
-                                <div class="p-2 bg-white border border-dashed rounded-3">
-                                    <label class="form-label extra-small fw-bold text-muted mb-1" id="exchange_rate_label">سعر الصرف</label>
-                                    <div class="input-group input-group-sm">
-                                        <span class="input-group-text bg-light">1 <span class="pur-symbol"></span> =</span>
-                                        <input type="number" step="0.000001" name="exchange_rate" id="invoice_exchange_rate" class="form-control text-center fw-bold" value="1.000000">
-                                        <span class="input-group-text bg-light"><span class="sale-symbol"></span></span>
-                                    </div>
-                                    <div class="mt-1 extra-small text-muted">التكلفة المعادلة: <span id="equivalent_cost_display" class="fw-bold">0.00</span></div>
-                                </div>
-                            </div>
-
-                            <div class="col-12">
-                                <?php if (isset($settings['auto_invoice_generation']) && ($settings['auto_invoice_generation'] == '1' || $settings['auto_invoice_generation'] === true)): ?>
-                                    <input type="hidden" name="record_purchase" id="record_purchase" value="1">
-                                <?php else: ?>
-                                    <div class="mt-2 p-3 bg-primary bg-opacity-10 rounded-4 border border-primary border-opacity-25">
-                                        <label class="form-label small fw-bold text-primary mb-2"><i class="fas fa-question-circle me-1"></i> هل تريد إنشاء فاتورة شراء للمورد؟</label>
-                                        <select name="record_purchase" id="record_purchase" class="form-select border-primary" required>
-                                            <option value="1" <?php echo $purchase_invoice ? 'selected' : ''; ?>>نعم، تسجيل مديونية</option>
-                                            <option value="0" <?php echo !$purchase_invoice ? 'selected' : ''; ?>>لا، مبيعات فقط</option>
-                                        </select>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-
-                            <hr class="my-2">
-
-                            <div class="col-12">
-                                <label class="form-label small fw-bold text-muted">نوع التوصيل <span class="text-danger">*</span></label>
-                                <select name="delivery_type" id="delivery_type" class="form-select" required>
-                                    <option value="draft" <?php echo (!$sales_invoice || $sales_invoice['delivery_type'] == 'draft') ? 'selected' : ''; ?>>📝 مسودة (ترحيل يدوي لاحقاً)</option>
-                                    <option value="cash" <?php echo ($sales_invoice && $sales_invoice['delivery_type'] == 'cash') ? 'selected' : ''; ?>>💵 نقد</option>
-                                    <option value="credit" <?php echo ($sales_invoice && $sales_invoice['delivery_type'] == 'credit') ? 'selected' : ''; ?>>📅 آجل (على حساب العميل)</option>
-                                    <option value="bank_transfer" <?php echo ($sales_invoice && $sales_invoice['delivery_type'] == 'bank_transfer') ? 'selected' : ''; ?>>🏦 تحويل بنكي</option>
-                                    <option value="agent" <?php echo ($sales_invoice && $sales_invoice['delivery_type'] == 'agent') ? 'selected' : ''; ?>>👤 وكيل (على حساب الوكيل)</option>
-                                </select>
-                            </div>
-
-                            <div class="col-12" id="account_select_div">
-                                <label class="form-label small fw-bold text-muted" id="account_label">الحساب المتأثر</label>
-                                <select name="account_id" id="account_id" class="form-select select2-financial" required>
-                                    <option value="">-- اختر --</option>
-                                    <?php
-                                    $delivery_type = $sales_invoice ? $sales_invoice['delivery_type'] : 'draft';
-                                    $current_account_id = $sales_invoice ? $sales_invoice['account_id'] : null;
-                                    $current_customer_id = $sales_invoice ? $sales_invoice['customer_id'] : null;
-                                    $current_agent_id = $sales_invoice ? $sales_invoice['agent_id'] : null;
-                                    
-                                    $list = [];
-                                    if ($delivery_type == 'cash') $list = $cashboxes_entities;
-                                    elseif ($delivery_type == 'credit') $list = $customers_entities;
-                                    elseif ($delivery_type == 'bank_transfer') $list = $banks_entities;
-                                    elseif ($delivery_type == 'agent') $list = $agents_entities;
-                                    
-                                    foreach($list as $item) {
-                                        $selected = '';
-                                        if ($delivery_type == 'cash' || $delivery_type == 'bank_transfer') {
-                                            if ($current_account_id == $item['account_id']) $selected = 'selected';
-                                        } elseif ($delivery_type == 'credit') {
-                                            if ($current_customer_id == $item['id']) $selected = 'selected';
-                                        } elseif ($delivery_type == 'agent') {
-                                            if ($current_agent_id == $item['id']) $selected = 'selected';
-                                        }
-                                        echo '<option value="'.$item['account_id'].'" data-entity-id="'.($item['id'] ?? '').'" '.$selected.'>'.$item['account_code'].' - '.$item['name'].'</option>';
-                                    }
-                                    ?>
-                                </select>
-                                <input type="hidden" name="customer_id" id="customer_id_hidden" value="<?php echo $current_customer_id; ?>">
-                                <input type="hidden" name="agent_id" id="agent_id_hidden" value="<?php echo $current_agent_id; ?>">
-                            </div>
-
-                            <div class="col-12" id="received_amount_div" style="<?php echo in_array($delivery_type, ['cash', 'bank_transfer']) ? '' : 'display:none;'; ?>">
-                                <label class="form-label small fw-bold text-success">المبلغ الواصل (المقبوض)</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-light text-primary"><i class="fas fa-hand-holding-usd"></i></span>
-                                    <input type="number" step="0.01" name="amount_received" id="amount_received" class="form-control fw-bold border-primary text-primary" value="<?php echo $sales_invoice ? $sales_invoice['amount_received'] : '0.00'; ?>">
-                                </div>
-                            </div>
-
-                            <hr class="my-1">
-                            
-                            <div class="col-12">
-                                <label class="form-label small fw-bold text-muted">بيان العملية</label>
-                                <textarea class="form-control rounded-3 form-control-sm" name="description" rows="1"><?php echo htmlspecialchars($trx['description']); ?></textarea>
-                            </div>
+                        <div class="row g-3 mt-3">
                             <div class="col-12">
                                 <label class="form-label small fw-bold text-muted">ملاحظات إضافية</label>
                                 <textarea class="form-control rounded-3 form-control-sm" name="notes" rows="1"><?php echo htmlspecialchars($trx['notes']); ?></textarea>
@@ -444,13 +351,62 @@ foreach($invoices as $inv) {
     </form>
 </div>
 
+<style>
+body.theme-dark .select2-container--default .select2-selection--single,
+body.theme-dark .select2-container--default .select2-selection--multiple {
+    background-color: #1a2234 !important;
+    border-color: #2d3748 !important;
+    color: #e2e8f0 !important;
+}
+body.theme-dark .select2-container--default .select2-selection--single .select2-selection__rendered {
+    color: #e2e8f0 !important;
+}
+body.theme-dark .select2-container--default .select2-selection--multiple .select2-selection__rendered {
+    color: #e2e8f0 !important;
+}
+body.theme-dark .select2-container--default .select2-selection--multiple .select2-selection__choice {
+    background: #334155 !important;
+    border: 1px solid #475569 !important;
+    color: #f8fafc !important;
+}
+body.theme-dark .select2-container--default .select2-selection--multiple .select2-selection__choice__display {
+    color: #f8fafc !important;
+}
+body.theme-dark .select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: #cbd5e1 !important;
+    border-left-color: #475569 !important;
+}
+body.theme-dark .select2-container--default .select2-selection--multiple .select2-selection__choice__remove:hover {
+    background: #475569 !important;
+    color: #ffffff !important;
+}
+body.theme-dark .select2-container--default .select2-search--inline .select2-search__field {
+    color: #e2e8f0 !important;
+}
+body.theme-dark .select2-container--default .select2-selection--single .select2-selection__arrow b {
+    border-color: #e2e8f0 transparent transparent transparent !important;
+}
+body.theme-dark .select2-container--default .select2-dropdown {
+    background-color: #1a2234 !important;
+    border-color: #2d3748 !important;
+}
+body.theme-dark .select2-container--default .select2-results__option--selected {
+    background-color: #2d3748 !important;
+    color: #f8fafc !important;
+}
+body.theme-dark .select2-container--default .select2-results__option--highlighted.select2-results__option--selectable {
+    background-color: #2d3748 !important;
+    color: #ffffff !important;
+}
+</style>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Select2 Initialization
     if ($.fn.select2) {
         $('.select2-financial').select2({
             width: '100%',
-            dropdownAutoWidth: true
+            dropdownAutoWidth: true,
+            dropdownParent: $('body')
         });
     }
 
@@ -461,7 +417,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function toggleSections() {
         const checkedRadio = document.querySelector('input[name="transaction_type"]:checked');
         const type = checkedRadio ? checkedRadio.value : (document.querySelector('input[name="transaction_type"]') ? document.querySelector('input[name="transaction_type"]').value : 'both');
-        
+
         if (cardSection && passportSection) {
             if (type === 'both') {
                 cardSection.style.display = 'block';
@@ -479,287 +435,206 @@ document.addEventListener('DOMContentLoaded', function() {
     typeRadios.forEach(radio => radio.addEventListener('change', toggleSections));
     toggleSections();
 
-    // Financial Logic Variables
-    const deliveryTypeSelect = document.getElementById('delivery_type');
-    const accountSelect = document.getElementById('account_id');
-    const accountLabel = document.getElementById('account_label');
-    const receivedDiv = document.getElementById('received_amount_div');
-    const customerAgentSelect = document.getElementById('customer_agent_id');
-    const customerIdHidden = document.getElementById('customer_id_hidden');
-    const agentIdHidden = document.getElementById('agent_id_hidden');
-
-    const entitiesData = {
-        cashboxes: <?php echo json_encode($cashboxes_entities); ?>,
-        customers: <?php echo json_encode($customers_entities); ?>,
-        banks: <?php echo json_encode($banks_entities); ?>,
-        agents: <?php echo json_encode($agents_entities); ?>
-    };
-
-    function handleDeliveryType(type) {
-        let list = [], label = 'الحساب المتأثر';
-        const $sel = $(accountSelect);
-
-        if (!type || type === '' || type === 'draft') {
-            $sel.prop('disabled', true).empty().append('<option value="">-- ترحيل يدوي لاحقاً --</option>').trigger('change');
-            accountLabel.innerText = 'الحساب المتأثر';
-            receivedDiv.style.display = 'none';
-            customerIdHidden.value = '';
-            agentIdHidden.value = '';
-            return;
-        }
-
-        $sel.prop('disabled', false);
-        if (type === 'cash') {
-            list = entitiesData.cashboxes;
-            label = 'الحساب المتأثر: الصناديق';
-            receivedDiv.style.display = 'block';
-        } else if (type === 'credit') {
-            list = entitiesData.customers;
-            label = 'الحساب المتأثر: العملاء';
-            receivedDiv.style.display = 'none';
-        } else if (type === 'bank_transfer') {
-            list = entitiesData.banks;
-            label = 'الحساب المتأثر: البنوك';
-            receivedDiv.style.display = 'block';
-        } else if (type === 'agent') {
-            list = entitiesData.agents;
-            label = 'الحساب المتأثر: الوكلاء';
-            receivedDiv.style.display = 'none';
-        }
-
-        accountLabel.innerText = label;
-        $sel.empty().append('<option value="">-- اختر الحساب --</option>');
-        
-        if (list && list.length > 0) {
-            list.forEach(item => {
-                const entityId = item.id || '';
-                $sel.append(`<option value="${item.account_id}" data-entity-id="${entityId}">${item.account_code} - ${item.name}</option>`);
-            });
-        }
-        
-        $sel.trigger('change');
-    }
-
-    $('#delivery_type').on('change', function() {
-        handleDeliveryType(this.value);
-    });
-
-    $('#account_id').on('change', function() {
-        const type = deliveryTypeSelect.value;
-        const selectedOpt = $(this).find(':selected');
-        const entityId = selectedOpt.attr('data-entity-id');
-        
-        customerIdHidden.value = (type === 'credit' ? entityId : '');
-        agentIdHidden.value = (type === 'agent' ? entityId : '');
-    });
-
     const transactionTypeSelect = document.getElementById('transaction_type_id');
-    const salePriceInput = document.getElementById('sale_price');
-    const purchasePriceInput = document.getElementById('purchase_price');
-    const saleCurrencySelect = document.getElementById('sale_currency_id');
-    const mainCurrencySelect = document.getElementById('main_currency_id');
-    const exchangeRateInput = document.getElementById('invoice_exchange_rate');
-    const exchangeContainer = document.getElementById('exchange_rate_container');
-    const recordPurchaseSwitch = document.getElementById('record_purchase');
-    const supplierDiv = document.getElementById('supplier_select_div');
+    const totalAmountInput = document.querySelector('input[name="total_amount"]');
+    const costAmountInput = document.querySelector('input[name="cost_amount"]');
+    const passportServiceInput = document.getElementById('passport_service_id');
+    const fullNameInput = document.querySelector('input[name="full_name"]');
+    const descriptionInput = document.querySelector('textarea[name="description"]');
 
-    const initialTypeOpt = transactionTypeSelect.options[transactionTypeSelect.selectedIndex];
-    let baseSalePrice = initialTypeOpt ? (parseFloat(initialTypeOpt.getAttribute('data-sale')) || 0) : 0;
-    let basePurchasePrice = initialTypeOpt ? (parseFloat(initialTypeOpt.getAttribute('data-cost')) || 0) : 0;
-    let baseCurrencyId = initialTypeOpt ? initialTypeOpt.getAttribute('data-currency') : null;
-
-    function convertPrice(price, fromCurrencyId, toCurrencyId) {
-        if (!fromCurrencyId || !toCurrencyId || fromCurrencyId == toCurrencyId) return price;
-        const fromOpt = Array.from(saleCurrencySelect.options).find(opt => opt.value == fromCurrencyId);
-        const toOpt = Array.from(saleCurrencySelect.options).find(opt => opt.value == toCurrencyId);
-        if (!fromOpt || !toOpt) return price;
-        const fromRate = parseFloat(fromOpt.getAttribute('data-rate')) || 1;
-        const toRate = parseFloat(toOpt.getAttribute('data-rate')) || 1;
-        return price * (fromRate / toRate);
-    }
-
-    function handleDeliveryType(type) {
-        let list = [], label = 'الحساب المتأثر';
-        const $sel = $(accountSelect);
-
-        console.log("Handling delivery type:", type);
-
-        if (!type || type === '' || type === 'draft') {
-            $sel.prop('disabled', true).empty().append('<option value="">-- اختر نوع التوصيل أولاً --</option>').trigger('change');
-            accountLabel.innerText = 'الحساب المتأثر';
-            receivedDiv.style.display = 'none';
+    function updateAutoDescription() {
+        if (!descriptionInput || !transactionTypeSelect) {
             return;
         }
 
-        $sel.prop('disabled', false);
-        if (type === 'cash') {
-            list = entitiesData.cashboxes;
-            label = 'الحساب: الصناديق';
-            receivedDiv.style.display = 'block';
-        } else if (type === 'credit') {
-            list = entitiesData.customers;
-            label = 'الحساب: العملاء';
-            receivedDiv.style.display = 'none';
-        } else if (type === 'bank_transfer') {
-            list = entitiesData.banks;
-            label = 'الحساب: البنوك';
-            receivedDiv.style.display = 'block';
-        } else if (type === 'agent') {
-            list = entitiesData.agents;
-            label = 'الحساب: الوكلاء';
-            receivedDiv.style.display = 'none';
-        } else {
-            receivedDiv.style.display = 'none';
+        const fullName = (fullNameInput ? fullNameInput.value : '').trim();
+        const selectedServiceNames = Array.from(transactionTypeSelect.selectedOptions || [])
+            .map(opt => (opt.textContent || '').trim())
+            .filter(Boolean);
+
+        let description = 'معاملة';
+        if (fullName !== '') {
+            description += ' للأخ ' + fullName;
+        }
+        if (selectedServiceNames.length > 0) {
+            description += ' تشمل: ' + selectedServiceNames.join('، ');
         }
 
-        accountLabel.innerText = label;
-        $sel.empty().append('<option value="">-- اختر --</option>');
-        
-        if (list && list.length > 0) {
-            list.forEach(item => {
-                const entityId = item.id || '';
-                const selected = (
-                    (type === 'cash' || type === 'bank_transfer') && item.account_id == "<?php echo $current_account_id; ?>" ||
-                    (type === 'credit' && entityId == "<?php echo $current_customer_id; ?>") ||
-                    (type === 'agent' && entityId == "<?php echo $current_agent_id; ?>")
-                ) ? 'selected' : '';
-                $sel.append(`<option value="${item.account_id}" data-entity-id="${entityId}" ${selected}>${item.account_code} - ${item.name}</option>`);
-            });
-        } else {
-            $sel.append('<option value="">لا توجد حسابات متاحة</option>');
-        }
-        
-        $sel.trigger('change');
+        descriptionInput.value = description;
     }
 
-    function updateFinancialLogic() {
-        const recordPurchase = recordPurchaseSwitch.checked;
-        const purCurrencyId = mainCurrencySelect.value;
-        const saleCurrencyId = saleCurrencySelect.value;
+    function updateTotalsFromTransactionType() {
+        let totalSale = 0;
+        let totalCost = 0;
+        let serviceCurrencyId = null;
 
-        // supplierDiv.style.display = recordPurchase ? 'block' : 'none'; // Always show as requested
-
-        if (purCurrencyId && saleCurrencyId && purCurrencyId != saleCurrencyId) {
-            exchangeContainer.style.display = 'block';
-            const purOpt = mainCurrencySelect.options[mainCurrencySelect.selectedIndex];
-            const saleOpt = saleCurrencySelect.options[saleCurrencySelect.selectedIndex];
-            
-            const purSymbol = purOpt.getAttribute('data-symbol') || '---';
-            const saleSymbol = saleOpt.getAttribute('data-symbol') || '---';
-            const purBuy = parseFloat(purOpt.getAttribute('data-buy')) || 1;
-            const saleSell = parseFloat(saleOpt.getAttribute('data-sell')) || 1;
-            
-            const rate = purBuy / saleSell;
-            
-            document.querySelectorAll('.pur-symbol').forEach(el => el.textContent = purSymbol);
-            document.querySelectorAll('.sale-symbol').forEach(el => el.textContent = saleSymbol);
-            document.getElementById('exchange_rate_label').innerHTML = `1 ${purSymbol} = ? ${saleSymbol}`;
-            
-            exchangeRateInput.value = rate.toFixed(6);
-        } else {
-            exchangeRateInput.value = '1.000000';
-            exchangeContainer.style.display = 'none';
+        const selectedOptions = transactionTypeSelect.selectedOptions;
+        for (let i = 0; i < selectedOptions.length; i++) {
+            const opt = selectedOptions[i];
+            totalSale += parseFloat(opt.getAttribute('data-sale')) || 0;
+            totalCost += parseFloat(opt.getAttribute('data-cost')) || 0;
+            if (!serviceCurrencyId) {
+                serviceCurrencyId = opt.getAttribute('data-currency');
+            }
         }
-        calculateEquivalent();
-    }
 
-    function calculateEquivalent() {
-        const cost = parseFloat(purchasePriceInput.value) || 0;
-        const sale = parseFloat(salePriceInput.value) || 0;
-        const saleCurrencyId = saleCurrencySelect.value;
-        const mainCurrencyId = mainCurrencySelect.value;
-        const rate = parseFloat(exchangeRateInput.value) || 1;
-        
-        const saleOpt = saleCurrencySelect.options[saleCurrencySelect.selectedIndex];
-        const mainOpt = mainCurrencySelect.options[mainCurrencySelect.selectedIndex];
-        const saleSymbol = saleOpt ? saleOpt.getAttribute('data-symbol') : '';
-        const mainSymbol = mainOpt ? mainOpt.getAttribute('data-symbol') : '';
-
-        // Cost in Sale Currency
-        let costInSale = (saleCurrencyId != mainCurrencyId) ? cost * rate : cost;
-        const formattedCostInSale = costInSale.toLocaleString(undefined, {minimumFractionDigits: 2}) + ' ' + saleSymbol;
-        
-        // Sale in Cost Currency
-        let saleInCost = (saleCurrencyId != mainCurrencyId) ? sale / rate : sale;
-        const formattedSaleInCost = saleInCost.toLocaleString(undefined, {minimumFractionDigits: 2}) + ' ' + mainSymbol;
-
-        document.getElementById('equivalent_cost_display').textContent = formattedCostInSale;
-        
-        const saleHint = document.getElementById('sale_price_equivalent_hint');
-        const costHint = document.getElementById('cost_price_equivalent_hint');
-        
-        if (saleCurrencyId != mainCurrencyId) {
-            if (cost > 0) {
-                saleHint.textContent = `التكلفة: ${formattedCostInSale}`;
-                saleHint.style.display = 'block';
-            } else {
-                saleHint.style.display = 'none';
+        if (totalAmountInput) {
+            totalAmountInput.value = totalSale.toFixed(2);
+            totalAmountInput.setAttribute('data-original-price', totalSale);
+            if (serviceCurrencyId) {
+                totalAmountInput.setAttribute('data-service-currency-id', serviceCurrencyId);
             }
+            totalAmountInput.dispatchEvent(new Event('input'));
+        }
 
-            if (sale > 0) {
-                costHint.textContent = `البيع: ${formattedSaleInCost}`;
-                costHint.style.display = 'block';
-            } else {
-                costHint.style.display = 'none';
+        if (costAmountInput) {
+            costAmountInput.value = totalCost.toFixed(2);
+            costAmountInput.setAttribute('data-original-cost', totalCost);
+            if (serviceCurrencyId) {
+                costAmountInput.setAttribute('data-cost-service-currency-id', serviceCurrencyId);
             }
-        } else {
-            saleHint.style.display = 'none';
-            costHint.style.display = 'none';
+            costAmountInput.dispatchEvent(new Event('input'));
+        }
+
+        if (typeof updateConvertedPrices === 'function') {
+            updateConvertedPrices();
         }
     }
 
-    // Removed redundant listeners since they are handled in handleDeliveryType
-    // and the new customer_agent_id listener.
+    $('#transaction_type_id').on('select2:select select2:unselect change', function() {
+        updateTotalsFromTransactionType();
+        fetchPricing();
+        updateAutoDescription();
+    });
 
-    // Event Listeners
-    $('#transaction_type_id').on('select2:select change', function(e) {
-        const selectedOption = this.options[this.selectedIndex];
-        if (selectedOption && selectedOption.value) {
-            baseSalePrice = parseFloat(selectedOption.getAttribute('data-sale')) || 0;
-            basePurchasePrice = parseFloat(selectedOption.getAttribute('data-cost')) || 0;
-            baseCurrencyId = selectedOption.getAttribute('data-currency');
-            
-            // تعبئة الأسعار الأصلية
-            salePriceInput.value = baseSalePrice.toFixed(2);
-            purchasePriceInput.value = basePurchasePrice.toFixed(2);
-            
-            // تعبئة العملات الأصلية للتسعيرة (مع مراعاة Select2)
-            if (baseCurrencyId) {
-                $('#sale_currency_id').val(baseCurrencyId).trigger('change');
-                $('#main_currency_id').val(baseCurrencyId).trigger('change');
+    transactionTypeSelect.addEventListener('change', function() {
+        updateTotalsFromTransactionType();
+        fetchPricing();
+        updateAutoDescription();
+    });
+
+    function fetchPricing() {
+        const selectedOptions = $('#transaction_type_id').find(':selected');
+        let totalSalePrice = 0;
+        let totalCostPrice = 0;
+        let serviceId = <?php echo json_encode($passportServiceId); ?>;
+        let currencyId = null;
+
+        selectedOptions.each(function() {
+            const salePrice = parseFloat($(this).data('sale')) || 0;
+            const costPrice = parseFloat($(this).data('cost')) || 0;
+            const typeServiceId = $(this).data('service-id');
+
+            totalSalePrice += salePrice;
+            totalCostPrice += costPrice;
+
+            if (!currencyId) {
+                currencyId = $(this).data('currency');
             }
-            
-            // تحديث المنطق المالي (سعر الصرف، التلميحات، إلخ)
-            updateFinancialLogic();
+
+            if (typeServiceId && serviceId === <?php echo json_encode($passportServiceId); ?>) {
+                serviceId = typeServiceId;
+            }
+        });
+
+        if (!serviceId) {
+            serviceId = <?php echo json_encode($passportServiceId); ?>;
+        }
+        if (passportServiceInput) {
+            passportServiceInput.value = serviceId || <?php echo (int)$passportServiceId; ?>;
+        }
+
+        const $totalAmountInput = $('input[name="total_amount"]');
+        const $costAmountInput = $('input[name="cost_amount"]');
+
+        $totalAmountInput.val(totalSalePrice.toFixed(2))
+            .attr('data-original-price', totalSalePrice);
+        $costAmountInput.val(totalCostPrice.toFixed(2))
+            .attr('data-original-cost', totalCostPrice);
+
+        if (currencyId) {
+            $totalAmountInput.attr('data-service-currency-id', currencyId);
+            $costAmountInput.attr('data-cost-service-currency-id', currencyId);
+            const saleCurrencySelect = $('select[name="sale_currency_id"]');
+            if (saleCurrencySelect.length > 0) {
+                saleCurrencySelect.val(currencyId).trigger('change');
+            }
+        }
+
+        if (typeof updateConvertedPrices === 'function') {
+            updateConvertedPrices();
+        }
+
+        if (!serviceId) return;
+
+        $.ajax({
+            url: 'ajax_get_service_accounts.php',
+            data: {
+                service_id: serviceId
+            },
+            dataType: 'json',
+            success: function(res) {
+                if (res.success) {
+                    $('#service_revenue_account').val(res.revenue_account_name || 'لم يتم إعداد الحساب');
+                    $('#service_cost_account').val(res.cost_account_name || 'لم يتم إعداد الحساب');
+                    $('#service_profit_account').val(res.profit_account_name || 'لم يتم إعداد الحساب');
+                    $('#service_revenue_account_id').val(res.revenue_account_id || '');
+                    $('#service_cost_account_id').val(res.cost_account_id || '');
+                    $('#service_profit_account_id').val(res.profit_account_id || '');
+                }
+            }
+        });
+    }
+
+    $(document).on('change', 'select[name="account_id"]', fetchPricing);
+    $(document).on('change', 'select[name="supplier_id"]', fetchPricing);
+    $(document).on('change', 'select[name="sale_currency_id"]', function() {
+        if (typeof updateConvertedPrices === 'function') {
+            updateConvertedPrices();
         }
     });
 
-    $(saleCurrencySelect).on('change', function() {
-        if (baseCurrencyId && baseSalePrice) {
-            const newPrice = convertPrice(baseSalePrice, baseCurrencyId, this.value);
-            salePriceInput.value = newPrice.toFixed(2);
+    if (fullNameInput) {
+        fullNameInput.addEventListener('input', updateAutoDescription);
+        fullNameInput.addEventListener('change', updateAutoDescription);
+    }
+
+    setTimeout(function() {
+        updateTotalsFromTransactionType();
+        fetchPricing();
+        updateAutoDescription();
+    }, 500);
+
+    // City Validation Logic
+    const fromCitySelect = document.querySelector('select[name="from_city_id"]');
+    const toCitySelect = document.querySelector('select[name="to_city_id"]');
+    
+    function validateCities() {
+        if (fromCitySelect && toCitySelect) {
+            const fromId = fromCitySelect.value;
+            const toId = toCitySelect.value;
+            if (fromId && toId && fromId === toId) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'تحذير',
+                    text: 'لا يمكن أن تكون المدينة المنطلق نفس المدينة المقصود!',
+                    confirmButtonText: 'حسناً'
+                });
+            }
         }
-        updateFinancialLogic();
-    });
-
-    $(mainCurrencySelect).on('change', function() {
-        if (baseCurrencyId && basePurchasePrice) {
-            const newPrice = convertPrice(basePurchasePrice, baseCurrencyId, this.value);
-            purchasePriceInput.value = newPrice.toFixed(2);
-        }
-        updateFinancialLogic();
-    });
-
-    recordPurchaseSwitch.addEventListener('change', updateFinancialLogic);
-
-    [purchasePriceInput, salePriceInput, exchangeRateInput].forEach(el => {
-        el.addEventListener('input', calculateEquivalent);
-    });
-
+    }
+    
+    if (fromCitySelect) {
+        fromCitySelect.addEventListener('change', validateCities);
+    }
+    if (toCitySelect) {
+        toCitySelect.addEventListener('change', validateCities);
+    }
+    
     // Travel Date Day Name Logic
     const travelDateInput = document.getElementById('travel_date');
     const travelDayName = document.getElementById('travel_day_name');
-    
+
     function updateTravelDay() {
         if (travelDateInput.value) {
             const date = new Date(travelDateInput.value);
@@ -769,12 +644,17 @@ document.addEventListener('DOMContentLoaded', function() {
             travelDayName.textContent = '---';
         }
     }
-    
-    travelDateInput.addEventListener('change', updateTravelDay);
 
-    // Initial Trigger
-    updateFinancialLogic();
-    updateTravelDay();
+    if (travelDateInput) {
+        travelDateInput.addEventListener('change', updateTravelDay);
+        updateTravelDay();
+    }
+
+    setTimeout(function() {
+        updateTotalsFromTransactionType();
+        fetchPricing();
+        updateAutoDescription();
+    }, 600);
 });
 </script>
 

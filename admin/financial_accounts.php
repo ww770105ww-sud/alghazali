@@ -15,93 +15,129 @@ if (!$is_admin && !in_array($user_role, ['accountant', 'branch_manager', 'agent'
     exit();
 }
 
-// تصفير كافة الأرصدة بطلب من المستخدم
-if (isset($_GET['zero_balances']) && $_GET['zero_balances'] == '1') {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
-        die("غير مصرح لك بتصفير الأرصدة.");
-    }
-    try {
-        // كتابة قائمة الجداول للتشخيص
-        $stmt_all_tables = $pdo->query("SHOW TABLES");
-        $existing_tables = $stmt_all_tables->fetchAll(PDO::FETCH_COLUMN);
-        file_put_contents(__DIR__ . '/tables_list.txt', implode("\n", $existing_tables));
+$isDeveloper = ($user_role === 'developer' || (int)($user_role_id ?? 0) === 2);
+$canManageFinancialAccounts = $is_admin || $user_role === 'accountant' || has_permission('manage_financial_accounts');
 
-        $pdo->beginTransaction();
-        $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
-        
-        // تصفير أرصدة الحسابات
-        $pdo->exec("UPDATE account_balances_unified SET opening_balance = 0, current_balance = 0, current_balance_base = 0");
-        
-        // حذف البيانات من الجداول المالية إن وجدت
-        $tables_to_delete = [
-            'journal_lines', 'journal_entries', 'financial_transactions', 
-            'receipts', 'payments', 'unified_payments', 
-            'invoices', 'invoice_details', 'bus_flight_bookings'
-        ];
-        foreach ($tables_to_delete as $table) {
-            if (in_array($table, $existing_tables)) {
-                $pdo->exec("DELETE FROM `$table`");
-            }
-        }
-        
-        $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
-        $pdo->commit();
-        echo "<script>alert('تم تصفير جميع الأرصدة وحذف كافة الحركات المالية المتوفرة بنجاح!'); location.href='financial_accounts.php';</script>";
-        exit();
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "خطأ أثناء تصفير الأرصدة: " . $e->getMessage();
-    }
+if (isset($_GET['zero_balances']) || isset($_GET['repair_tree']) || isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
 }
 
-// إصلاح شجرة الحسابات بطلب من المستخدم
-if (isset($_GET['repair_tree']) && $_GET['repair_tree'] == '1') {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
-        die("غير مصرح لك بإصلاح شجرة الحسابات.");
+// تصفير كافة الأرصدة بطلب من المطور فقط عبر POST + CSRF
+if (isset($_POST['dangerous_financial_action']) && $_POST['dangerous_financial_action'] === 'zero_balances') {
+    if (!$isDeveloper) {
+        http_response_code(403);
+        die("غير مصرح لك بتصفير الأرصدة.");
     }
-    try {
-        $pdo->beginTransaction();
-        
-        // جلب جميع الحسابات لترتيبها حسب الكود
-        $stmt = $pdo->query("SELECT id, account_code FROM unified_accounts ORDER BY LENGTH(account_code) ASC, account_code ASC");
-        $all_accs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        $stmt_update = $pdo->prepare("UPDATE unified_accounts SET parent_id = ? WHERE id = ?");
-        
-        foreach ($all_accs as $acc) {
-            $code = trim($acc['account_code']);
-            $id = $acc['id'];
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        try {
+            // كتابة قائمة الجداول للتشخيص
+            $stmt_all_tables = $pdo->query("SHOW TABLES");
+            $existing_tables = $stmt_all_tables->fetchAll(PDO::FETCH_COLUMN);
+            file_put_contents(__DIR__ . '/tables_list.txt', implode("\n", $existing_tables));
+
+            $pdo->beginTransaction();
+            $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
             
-            // إذا كان الكود طوله 1، فهو حساب رئيسي في الجذر
-            if (strlen($code) <= 1) {
-                $stmt_update->execute([null, $id]);
-                continue;
-            }
+            // حذف جميع أرصدة الحسابات (بدلاً من مجرد تصفيرها)
+            $pdo->exec("DELETE FROM account_balances_unified");
             
-            // البحث عن أطول بادئة كود تطابق كود حساب موجود في قاعدة البيانات
-            $parent_id = null;
-            for ($i = strlen($code) - 1; $i >= 1; $i--) {
-                $prefix = substr($code, 0, $i);
-                $stmt_find = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_code = ?");
-                $stmt_find->execute([$prefix]);
-                $found_parent = $stmt_find->fetch(PDO::FETCH_ASSOC);
-                
-                if ($found_parent) {
-                    $parent_id = $found_parent['id'];
-                    break;
+            // حذف البيانات من الجداول المالية إن وجدت
+            $tables_to_delete = [
+                'journal_lines', 'journal_entries', 'financial_transactions',
+                'receipts', 'payments', 'unified_payments',
+                'invoices', 'invoice_details', 'bus_flight_bookings'
+            ];
+            foreach ($tables_to_delete as $table) {
+                if (in_array($table, $existing_tables)) {
+                    $pdo->exec("DELETE FROM `$table`");
                 }
             }
             
-            // تحديث الأب في قاعدة البيانات
-            $stmt_update->execute([$parent_id, $id]);
+            // إضافة العملة الافتراضية لجميع الحسابات النشطة
+            $stmt_def_curr = $pdo->query("SELECT id, currency_code FROM currencies WHERE is_default = 1 LIMIT 1");
+            $default_curr = $stmt_def_curr->fetch(PDO::FETCH_ASSOC);
+            
+            if ($default_curr) {
+                $stmt_all_acc = $pdo->query("SELECT id FROM unified_accounts WHERE is_active = 1");
+                $all_acc_ids = $stmt_all_acc->fetchAll(PDO::FETCH_COLUMN);
+                
+                foreach ($all_acc_ids as $acc_id) {
+                    $stmt_check = $pdo->prepare("SELECT id FROM account_balances_unified WHERE account_id = ? AND currency_id = ? AND branch_id IS NULL");
+                    $stmt_check->execute([$acc_id, $default_curr['id']]);
+                    if (!$stmt_check->fetch()) {
+                        $stmt_insert = $pdo->prepare("
+                            INSERT INTO account_balances_unified
+                            (account_id, branch_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen)
+                            VALUES (?, NULL, ?, ?, 0, 0, 0, 0, 0)
+                        ");
+                        $stmt_insert->execute([$acc_id, $default_curr['id'], $default_curr['currency_code']]);
+                    }
+                }
+            }
+            
+            $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
+            $pdo->commit();
+            echo "<script>alert('تم تصفير جميع الأرصدة وحذف كافة الحركات المالية المتوفرة بنجاح!'); location.href='financial_accounts.php';</script>";
+            exit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $error = "خطأ أثناء تصفير الأرصدة: " . $e->getMessage();
         }
-        
-        $pdo->commit();
-        echo "<script>alert('تم إصلاح شجرة الحسابات وربط الحسابات بآبائها الصحيحة بناءً على كود الحساب بنجاح!'); location.href='financial_accounts.php';</script>";
-        exit();
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "خطأ أثناء إصلاح شجرة الحسابات: " . $e->getMessage();
+    }
+}
+
+// إصلاح شجرة الحسابات بطلب من المطور فقط عبر POST + CSRF
+if (isset($_POST['dangerous_financial_action']) && $_POST['dangerous_financial_action'] === 'repair_tree') {
+    if (!$isDeveloper) {
+        http_response_code(403);
+        die("غير مصرح لك بإصلاح شجرة الحسابات.");
+    }
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        try {
+            $pdo->beginTransaction();
+            
+            // جلب جميع الحسابات لترتيبها حسب الكود
+            $stmt = $pdo->query("SELECT id, account_code FROM unified_accounts ORDER BY LENGTH(account_code) ASC, account_code ASC");
+            $all_accs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $stmt_update = $pdo->prepare("UPDATE unified_accounts SET parent_id = ? WHERE id = ?");
+            
+            foreach ($all_accs as $acc) {
+                $code = trim($acc['account_code']);
+                $id = $acc['id'];
+                
+                if (strlen($code) <= 1) {
+                    $stmt_update->execute([null, $id]);
+                    continue;
+                }
+                
+                $parent_id = null;
+                for ($i = strlen($code) - 1; $i >= 1; $i--) {
+                    $prefix = substr($code, 0, $i);
+                    $stmt_find = $pdo->prepare("SELECT id FROM unified_accounts WHERE account_code = ?");
+                    $stmt_find->execute([$prefix]);
+                    $found_parent = $stmt_find->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($found_parent) {
+                        $parent_id = $found_parent['id'];
+                        break;
+                    }
+                }
+                
+                $stmt_update->execute([$parent_id, $id]);
+            }
+            
+            $pdo->commit();
+            echo "<script>alert('تم إصلاح شجرة الحسابات وربط الحسابات بآبائها الصحيحة بناءً على كود الحساب بنجاح!'); location.href='financial_accounts.php';</script>";
+            exit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $error = "خطأ أثناء إصلاح شجرة الحسابات: " . $e->getMessage();
+        }
     }
 }
 
@@ -115,15 +151,10 @@ $currencies = $pdo->query("SELECT id, currency_name, is_default FROM currencies"
 
 // جلب شجرة الحسابات للربط
 $type_filter = $_GET['type'] ?? '';
-if ($type_filter === 'expense') {
-    $chart_accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_accounts WHERE account_type = 'expense' AND (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
-} elseif ($type_filter === 'bank') {
-    $chart_accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_accounts WHERE account_code LIKE '11102%' AND (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
-} elseif ($type_filter === 'box') {
-    $chart_accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_accounts WHERE account_code LIKE '11101%' AND (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
-} else {
-    $chart_accounts = $pdo->query("SELECT id, account_code, account_name_ar FROM unified_accounts WHERE (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
-}
+
+// جلب جميع الحسابات النشطة/موقوفة للربط كأب
+$chart_accounts = $pdo->query("SELECT id, account_code, account_name_ar, account_type FROM unified_accounts WHERE (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
+$all_accounts = $pdo->query("SELECT id, account_code, account_name_ar, account_type, parent_id FROM unified_accounts WHERE (account_status = 'active' OR account_status = 'dormant') ORDER BY account_code")->fetchAll();
 
 // دالة لبناء شجرة الحسابات بشكل هرمي بتعقيد O(n) (مميز جدًا!)
 function buildAccountTree(&$accounts)
@@ -244,31 +275,32 @@ function calculateAggregateBalances(&$accounts)
     unset($acc);
 }
 
-// حساب الأرصدة الحقيقية مباشرة من journal_lines لكل حساب (مثل كشف الحساب)
+// حساب الأرصدة من account_balances_unified لكل حساب (مثل كشف الحساب)
 $stmt_real_balances = $pdo->query("
     SELECT 
-        jl.account_id, 
-        jl.currency_id,
-        SUM(jl.debit - jl.credit) as net_balance,
-        SUM((jl.debit - jl.credit) * COALESCE(c.exchange_rate, 1)) as net_balance_base
-    FROM journal_lines jl
-    JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
-    LEFT JOIN currencies c ON jl.currency_id = c.id
-    WHERE ft.status = 'posted'
-    GROUP BY jl.account_id, jl.currency_id
+        abu.account_id, 
+        abu.currency_id,
+        abu.current_balance as net_balance,
+        abu.current_balance_base as net_balance_base,
+        c.currency_name, c.currency_symbol, c.currency_code
+    FROM account_balances_unified abu
+    LEFT JOIN currencies c ON abu.currency_id = c.id
 ");
 $real_balances_raw = $stmt_real_balances->fetchAll(PDO::FETCH_ASSOC);
 
 $real_balances = [];
 $real_balances_base = [];
+$all_balances_map = [];
 foreach ($real_balances_raw as $b) {
     $account_id = $b['account_id'];
     if (!isset($real_balances[$account_id])) {
         $real_balances[$account_id] = [];
         $real_balances_base[$account_id] = 0;
+        $all_balances_map[$account_id] = [];
     }
     $real_balances[$account_id][$b['currency_id']] = $b['net_balance'];
     $real_balances_base[$account_id] += $b['net_balance_base'];
+    $all_balances_map[$account_id][] = $b;
 }
 
 // جلب جميع الحسابات لبناء الشجرة من الجدول الموحد مع الأرصدة التجميعية (مقومة بالعملة الأساسية)
@@ -296,165 +328,186 @@ foreach ($all_chart_accounts as $acc) {
     $aggregate_balances_map[$acc['id']] = $acc['current_balance'];
 }
 
-// حذف حساب مالي
-if (isset($_GET['delete'])) {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
+// حذف حساب مالي عبر POST + CSRF فقط
+if (isset($_POST['delete_account'])) {
+    if (!$canManageFinancialAccounts) {
         die("غير مصرح لك بحذف الحسابات المالية.");
     }
-    $id = $_GET['delete'];
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        $id = (int)$_POST['delete_account'];
 
-    try {
-        // التحقق من وجود حسابات فرعية
-        $stmt_check_children = $pdo->prepare("SELECT COUNT(*) FROM unified_accounts WHERE parent_id = ?");
-        $stmt_check_children->execute([$id]);
-        if ($stmt_check_children->fetchColumn() > 0) {
-            throw new Exception("لا يمكن حذف هذا الحساب لوجود حسابات فرعية مرتبطة به.");
+        try {
+            // التحقق من وجود حسابات فرعية
+            $stmt_check_children = $pdo->prepare("SELECT COUNT(*) FROM unified_accounts WHERE parent_id = ?");
+            $stmt_check_children->execute([$id]);
+            if ($stmt_check_children->fetchColumn() > 0) {
+                throw new Exception("لا يمكن حذف هذا الحساب لوجود حسابات فرعية مرتبطة به.");
+            }
+
+            // التحقق من وجود حركات في دفتر اليومية
+            $stmt_check_journal = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE account_id = ?");
+            $stmt_check_journal->execute([$id]);
+            if ($stmt_check_journal->fetchColumn() > 0) {
+                throw new Exception("لا يمكن حذف الحساب لوجود حركات مالية مسجلة عليه.");
+            }
+
+            // التحقق من وجود حركات مالية موحدة
+            $stmt_check_unified = $pdo->prepare("SELECT COUNT(*) FROM financial_transactions WHERE (party_account_id = ? OR cash_bank_account_id = ?)");
+            $stmt_check_unified->execute([$id, $id]);
+            if ($stmt_check_unified->fetchColumn() > 0) {
+                throw new Exception("لا يمكن حذف الحساب لوجود حركات مالية مرتبطة به.");
+            }
+
+            $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
+            $stmt->execute([$id]);
+
+            echo "<script>location.href='financial_accounts.php?success=4&type=" . ($type_filter ?? '') . "';</script>";
+            exit();
+        } catch (Exception $e) {
+            $error = "خطأ في الحذف: " . $e->getMessage();
         }
-
-        // التحقق من وجود حركات في دفتر اليومية
-        $stmt_check_journal = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE account_id = ?");
-        $stmt_check_journal->execute([$id]);
-        if ($stmt_check_journal->fetchColumn() > 0) {
-            throw new Exception("لا يمكن حذف الحساب لوجود حركات مالية مسجلة عليه.");
-        }
-
-        // التحقق من وجود حركات مالية موحدة
-        $stmt_check_unified = $pdo->prepare("SELECT COUNT(*) FROM financial_transactions WHERE (party_account_id = ? OR cash_bank_account_id = ?)");
-        $stmt_check_unified->execute([$id, $id]);
-        if ($stmt_check_unified->fetchColumn() > 0) {
-            throw new Exception("لا يمكن حذف الحساب لوجود حركات مالية مرتبطة به.");
-        }
-
-        $stmt = $pdo->prepare("UPDATE unified_accounts SET account_status = 'inactive' WHERE id = ?");
-        $stmt->execute([$id]);
-
-        echo "<script>location.href='financial_accounts.php?success=4&type=" . ($type_filter ?? '') . "';</script>";
-        exit();
-    } catch (Exception $e) {
-        $error = "خطأ في الحذف: " . $e->getMessage();
     }
 }
 
 // إضافة حساب مالي جديد
 if (isset($_POST['add_account'])) {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
+    if (!$canManageFinancialAccounts) {
         die("غير مصرح لك بإضافة حسابات مالية.");
     }
-    $account_name = $_POST['account_name'];
-    $parent_id = !empty($_POST['parent_id']) ? $_POST['parent_id'] : null;
-    $currency_id = $_POST['currency_id'];
-    $opening_balance = $_POST['opening_balance'] ?? 0;
-    $status = $_POST['status'] == 'active' ? 'active' : 'dormant';
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        $account_name = $_POST['account_name'];
+        $parent_id = !empty($_POST['parent_id']) ? (int)$_POST['parent_id'] : null;
+        $currency_id = (int)$_POST['currency_id'];
+        $opening_balance = (float)($_POST['opening_balance'] ?? 0);
+        $status = $_POST['status'] == 'active' ? 'active' : 'dormant';
 
-    try {
-        $pdo->beginTransaction();
+        try {
+            $pdo->beginTransaction();
 
-        $account_type = 'asset';
-        $normal_balance = 'debit';
-        $new_code = '';
+            $account_type = 'asset';
+            $normal_balance = 'debit';
+            $new_code = '';
 
-        if ($parent_id) {
-            // جلب كود ونوع الحساب الأب
-            $stmt_parent = $pdo->prepare("SELECT account_code, account_type, normal_balance FROM unified_accounts WHERE id = ?");
-            $stmt_parent->execute([$parent_id]);
-            $parent = $stmt_parent->fetch();
+            if ($parent_id) {
+                // جلب كود ونوع الحساب الأب
+                $stmt_parent = $pdo->prepare("SELECT account_code, account_type, normal_balance FROM unified_accounts WHERE id = ?");
+                $stmt_parent->execute([$parent_id]);
+                $parent = $stmt_parent->fetch();
 
-            if (!$parent) throw new Exception("يجب اختيار حساب أب صالح من الشجرة.");
+                if (!$parent) throw new Exception("يجب اختيار حساب أب صالح من الشجرة.");
 
-            $account_type = $parent['account_type'];
-            $normal_balance = $parent['normal_balance'];
+                $account_type = $parent['account_type'];
+                $normal_balance = $parent['normal_balance'];
 
-            // توليد كود حساب جديد (زيادة الرقم الأخير)
-            $stmt_last = $pdo->prepare("SELECT MAX(account_code) FROM unified_accounts WHERE parent_id = ?");
-            $stmt_last->execute([$parent_id]);
-            $last_code = $stmt_last->fetchColumn();
+                // توليد كود حساب جديد (زيادة الرقم الأخير)
+                $stmt_last = $pdo->prepare("SELECT MAX(account_code) FROM unified_accounts WHERE parent_id = ?");
+                $stmt_last->execute([$parent_id]);
+                $last_code = $stmt_last->fetchColumn();
 
-            if ($last_code) {
-                $new_code = (string)((int)$last_code + 1);
+                if ($last_code) {
+                    $new_code = (string)((int)$last_code + 1);
+                } else {
+                    $new_code = $parent['account_code'] . '001';
+                }
             } else {
-                $new_code = $parent['account_code'] . '001';
+                // إضافة حساب رئيسي (مستوى 1)
+                $account_type = $_POST['account_type'] ?? 'asset';
+                $normal_balance = ($account_type == 'asset' || $account_type == 'expense') ? 'debit' : 'credit';
+
+                $stmt_last = $pdo->prepare("SELECT MAX(account_code) FROM unified_accounts WHERE parent_id IS NULL AND account_code REGEXP '^[0-9]+$'");
+                $stmt_last->execute();
+                $last_code = $stmt_last->fetchColumn();
+                $new_code = $last_code ? (string)((int)$last_code + 1) : '1';
             }
-        } else {
-            // إضافة حساب رئيسي (مستوى 1)
-            $account_type = $_POST['account_type'] ?? 'asset';
-            $normal_balance = ($_POST['account_type'] == 'asset' || $_POST['account_type'] == 'expense') ? 'debit' : 'credit';
 
-            $stmt_last = $pdo->prepare("SELECT MAX(account_code) FROM unified_accounts WHERE parent_id IS NULL AND account_code REGEXP '^[0-9]+$'");
-            $stmt_last->execute();
-            $last_code = $stmt_last->fetchColumn();
-            $new_code = $last_code ? (string)((int)$last_code + 1) : '1';
-        }
+            // إدراج الحساب مع الحقول الجديدة
+                            $stmt = $pdo->prepare("INSERT INTO unified_accounts 
+                                (account_code, account_name_ar, account_type, normal_balance, parent_id, account_status)
+                                VALUES (?, ?, ?, ?, ?, ?)");
+                            $stmt->execute([$new_code, $account_name, $account_type, $normal_balance, $parent_id, $status]);
 
-        $stmt = $pdo->prepare("INSERT INTO unified_accounts (account_code, account_name_ar, account_type, normal_balance, parent_id, account_status) VALUES (?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$new_code, $account_name, $account_type, $normal_balance, $parent_id, $status]);
+            $new_account_id = $pdo->lastInsertId();
 
-        $new_account_id = $pdo->lastInsertId();
-
-        // تفعيل الرصيد الافتتاحي في الجدول الموحد - فقط العملة الأساسية للنظام
-        if ($base_currency_id) {
-            $opening_balance_for_base = $_POST['opening_balance'] ?? 0;
-            // Get currency code
+            // تفعيل الرصيد الافتتاحي في الجدول الموحد
             $stmt_curr = $pdo->prepare("SELECT currency_code, exchange_rate FROM currencies WHERE id = ?");
-            $stmt_curr->execute([$base_currency_id]);
+            $stmt_curr->execute([$currency_id]);
             $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
             $currency_code = $curr['currency_code'] ?? '';
             $rate = (float)($curr['exchange_rate'] ?? 1);
-            $opening_balance_base = $opening_balance_for_base * $rate;
+            $opening_balance_base = $opening_balance * $rate;
             
-            $stmt_base_balance = $pdo->prepare("INSERT INTO account_balances_unified (account_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
-            $stmt_base_balance->execute([$new_account_id, $base_currency_id, $currency_code, $opening_balance_for_base, $opening_balance_for_base, $opening_balance_base, $opening_balance_base]);
-        }
+            $stmt_base_balance = $pdo->prepare("INSERT INTO account_balances_unified 
+                                (account_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
+                            $stmt_base_balance->execute([$new_account_id, $currency_id, $currency_code, $opening_balance, $opening_balance, $opening_balance_base, $opening_balance_base]);
 
-        $pdo->commit();
-        echo "<script>location.href='financial_accounts.php?success=1&type=" . ($type_filter ?? '') . "';</script>";
-        exit();
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        $error = "حدث خطأ أثناء الإضافة: " . $e->getMessage();
+            $pdo->commit();
+            echo "<script>location.href='financial_accounts.php?success=1&type=" . ($type_filter ?? '') . "';</script>";
+            exit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $error = "حدث خطأ أثناء الإضافة: " . $e->getMessage();
+        }
     }
 }
 
 // تحديث حساب مالي
 if (isset($_POST['update_account'])) {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
+    if (!$canManageFinancialAccounts) {
         die("غير مصرح لك بتعديل الحسابات المالية.");
     }
-    $id = $_POST['id'];
-    $account_name = $_POST['account_name'];
-    $status = $_POST['status'];
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        $id = (int)$_POST['id'];
+        $account_name = $_POST['account_name'];
+        $status = $_POST['status'];
+        $account_type = $_POST['account_type'] ?? 'asset';
+        $parent_id = !empty($_POST['parent_id']) ? (int)$_POST['parent_id'] : null;
 
-    try {
-        $stmt = $pdo->prepare("UPDATE unified_accounts SET account_name_ar = ?, account_status = ? WHERE id = ?");
-        $stmt->execute([$account_name, ($status == 'active' ? 'active' : 'dormant'), $id]);
-        echo "<script>location.href='financial_accounts.php?success=2&type=" . ($type_filter ?? '') . "';</script>";
-    } catch (PDOException $e) {
-        $error = "حدث خطأ أثناء التحديث: " . $e->getMessage();
+        try {
+            $stmt = $pdo->prepare("UPDATE unified_accounts 
+                SET account_name_ar = ?, account_status = ?, account_type = ?, parent_id = ?
+                WHERE id = ?");
+            $stmt->execute([$account_name, ($status == 'active' ? 'active' : 'dormant'), $account_type, $parent_id, $id]);
+            echo "<script>location.href='financial_accounts.php?success=2&type=" . ($type_filter ?? '') . "';</script>";
+        } catch (PDOException $e) {
+            $error = "حدث خطأ أثناء التحديث: " . $e->getMessage();
+        }
     }
 }
 
 // إضافة رصيد عملة جديد لحساب موجود
 if (isset($_POST['add_account_balance'])) {
-    if (!$is_admin && $user_role !== 'accountant' && !has_permission('manage_financial_accounts')) {
+    if (!$canManageFinancialAccounts) {
         die("غير مصرح لك بإضافة أرصدة عملات.");
     }
-    $account_id = $_POST['account_id'];
-    $currency_id = $_POST['currency_id'];
-    $opening_balance = $_POST['opening_balance'];
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $error = "رمز التحقق الأمني غير صالح. أعد تحميل الصفحة وحاول مرة أخرى.";
+    } else {
+        $account_id = $_POST['account_id'];
+        $currency_id = $_POST['currency_id'];
+        $opening_balance = $_POST['opening_balance'];
 
-    try {
-        // Get currency code and exchange rate
-        $stmt_curr = $pdo->prepare("SELECT currency_code, exchange_rate FROM currencies WHERE id = ?");
-        $stmt_curr->execute([$currency_id]);
-        $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
-        $currency_code = $curr['currency_code'] ?? '';
-        $rate = (float)($curr['exchange_rate'] ?? 1);
-        $opening_balance_base = $opening_balance * $rate;
-        
-        $stmt = $pdo->prepare("INSERT INTO account_balances_unified (account_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
-        $stmt->execute([$account_id, $currency_id, $currency_code, $opening_balance, $opening_balance, $opening_balance_base, $opening_balance_base]);
-        echo "<script>location.href='financial_accounts.php?success=3';</script>";
-    } catch (PDOException $e) {
-        $error = "حدث خطأ: ربما هذه العملة موجودة مسبقاً لهذا الحساب.";
+        try {
+            // Get currency code and exchange rate
+            $stmt_curr = $pdo->prepare("SELECT currency_code, exchange_rate FROM currencies WHERE id = ?");
+            $stmt_curr->execute([$currency_id]);
+            $curr = $stmt_curr->fetch(PDO::FETCH_ASSOC);
+            $currency_code = $curr['currency_code'] ?? '';
+            $rate = (float)($curr['exchange_rate'] ?? 1);
+            $opening_balance_base = $opening_balance * $rate;
+            
+            $stmt = $pdo->prepare("INSERT INTO account_balances_unified (account_id, currency_id, currency_code, opening_balance, current_balance, opening_balance_base, current_balance_base, is_frozen, credit_limit, debit_limit) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0)");
+            $stmt->execute([$account_id, $currency_id, $currency_code, $opening_balance, $opening_balance, $opening_balance_base, $opening_balance_base]);
+            echo "<script>location.href='financial_accounts.php?success=3';</script>";
+        } catch (PDOException $e) {
+            $error = "حدث خطأ: ربما هذه العملة موجودة مسبقاً لهذا الحساب.";
+        }
     }
 }
 
@@ -466,7 +519,7 @@ if (!empty($ef['clause']) && $ef['clause'] != '1=1') {
 }
 $params = $ef['params'];
 
-// إضافة فلتر النوع (بنك أو صندوق) إذا وجد
+// إضافة فلتر النوع (بنك أو صندوق أو إيرادات أو مصاريف) إذا وجد
 $type_filter = $_GET['type'] ?? '';
 if ($type_filter === 'bank') {
     $where .= " AND (fa.account_code LIKE '102%')";
@@ -483,6 +536,9 @@ if ($type_filter === 'bank') {
 } elseif ($type_filter === 'expense') {
     $where .= " AND fa.account_type = 'expense'";
     $page_title = "إدارة حسابات المصاريف";
+} elseif ($type_filter === 'income') {
+    $where .= " AND fa.account_type = 'income'";
+    $page_title = "إدارة حسابات الإيرادات";
 } else {
     $page_title = "إدارة الحسابات المالية";
 }
@@ -497,32 +553,17 @@ $accounts_stmt = $pdo->prepare("
 $accounts_stmt->execute($params);
 $accounts = $accounts_stmt->fetchAll();
 
-// جلب الأرصدة الحقيقية للحسابات المعروضة فقط من journal_lines
+// جلب الأرصدة من account_balances_unified للحسابات المعروضة فقط
 $account_ids = array_column($accounts, 'id');
 $all_balances = [];
 $unified_balance_for_list = [];
 
 if (!empty($account_ids)) {
-    $in_query = implode(',', array_fill(0, count($account_ids), '?'));
-    $bal_stmt = $pdo->prepare("
-        SELECT 
-            jl.account_id, 
-            jl.currency_id,
-            c.currency_name, c.currency_symbol, c.currency_code,
-            c.exchange_rate, c.exchange_rate_sell, c.exchange_rate_buy, c.is_default,
-            SUM(jl.debit - jl.credit) as current_balance,
-            SUM((jl.debit - jl.credit) * COALESCE(c.exchange_rate,1)) as current_balance_base
-        FROM journal_lines jl
-        JOIN financial_transactions ft ON jl.financial_transaction_id = ft.id
-        JOIN currencies c ON jl.currency_id = c.id
-        WHERE jl.account_id IN ($in_query) AND ft.status = 'posted'
-        GROUP BY jl.account_id, jl.currency_id
-    ");
-    $bal_stmt->execute($account_ids);
-    $all_balances_raw = $bal_stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($all_balances_raw as $b) {
-        $all_balances[$b['account_id']][] = $b;
+    // We already have $all_balances_map from earlier, let's use that!
+    foreach ($account_ids as $acc_id) {
+        if (isset($all_balances_map[$acc_id])) {
+            $all_balances[$acc_id] = $all_balances_map[$acc_id];
+        }
     }
 }
 
@@ -658,7 +699,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                     </button>
                 </li>
             </ul>
-            <?php if ($is_admin || $user_role === 'accountant' || has_permission('manage_financial_accounts')): ?>
+            <?php if ($canManageFinancialAccounts): ?>
                 <button class="btn btn-primary rounded-pill px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#addAccountModal">
                     <i class="fas fa-plus-circle me-1"></i> إضافة حساب جديد
                 </button>
@@ -792,10 +833,14 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                                                 <button class="btn btn-sm btn-light border-0" data-bs-toggle="modal" data-bs-target="#editAccountModal<?php echo $acc['id']; ?>" title="تعديل">
                                                     <i class="fas fa-edit text-warning"></i>
                                                 </button>
-                                                <?php if ($is_admin || $user_role === 'accountant' || has_permission('manage_financial_accounts')): ?>
-                                                    <a href="financial_accounts.php?delete=<?php echo $acc['id']; ?>" class="btn btn-sm btn-light border-0" title="حذف" onclick="return confirm('هل أنت متأكد من حذف هذا الحساب؟')">
-                                                        <i class="fas fa-trash text-danger"></i>
-                                                    </a>
+                                                <?php if ($canManageFinancialAccounts): ?>
+                                                    <form method="post" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الحساب؟')">
+                                                        <?php echo csrf_input(); ?>
+                                                        <input type="hidden" name="delete_account" value="<?php echo $acc['id']; ?>">
+                                                        <button type="submit" class="btn btn-sm btn-light border-0" title="حذف">
+                                                            <i class="fas fa-trash text-danger"></i>
+                                                        </button>
+                                                    </form>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -842,7 +887,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                                             <i class="fas fa-barcode me-1"></i> كود الحساب: <?php echo htmlspecialchars($acc['account_code']); ?>
                                         </div>
                                     </div>
-                                    <?php if ($is_admin || $user_role === 'accountant' || has_permission('manage_financial_accounts')): ?>
+                                    <?php if ($canManageFinancialAccounts): ?>
                                         <div class="dropdown">
                                             <button class="btn btn-link text-muted p-0" data-bs-toggle="dropdown"><i class="fas fa-ellipsis-v"></i></button>
                                             <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0">
@@ -851,7 +896,15 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                                                     <hr class="dropdown-divider">
                                                 </li>
                                                 <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#editAccountModal<?php echo $acc['id']; ?>"><i class="fas fa-edit me-2"></i> تعديل الحساب</a></li>
-                                                <li><a class="dropdown-item text-danger" href="financial_accounts.php?delete=<?php echo $acc['id']; ?>" onclick="return confirm('هل أنت متأكد من حذف هذا الحساب؟')"><i class="fas fa-trash me-2"></i> حذف الحساب</a></li>
+                                                <li>
+                                                    <form method="post" class="mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الحساب؟')">
+                                                        <?php echo csrf_input(); ?>
+                                                        <input type="hidden" name="delete_account" value="<?php echo $acc['id']; ?>">
+                                                        <button type="submit" class="dropdown-item text-danger">
+                                                            <i class="fas fa-trash me-2"></i> حذف الحساب
+                                                        </button>
+                                                    </form>
+                                                </li>
                                             </ul>
                                         </div>
                                     <?php endif; ?>
@@ -911,13 +964,21 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                 <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
                     <h6 class="mb-0 fw-bold text-secondary">دليل الحسابات المتكامل - وكالة الغزالي للسفريات والحج والعمرة</h6>
                     <div class="d-flex align-items-center gap-2">
-                        <?php if ($is_admin || $user_role === 'accountant' || has_permission('manage_financial_accounts')): ?>
-                            <a href="financial_accounts.php?repair_tree=1" class="btn btn-sm btn-warning rounded-pill px-3 text-dark fw-bold" onclick="return confirm('هل أنت متأكد من رغبتك في إعادة بناء شجرة الحسابات تلقائياً بناءً على بادئات أكواد الحسابات؟ سيقوم هذا بربط كل حساب بوالده الصحيح وإصلاح أي انقطاع في الشجرة.')">
-                                <i class="fas fa-tools me-1"></i> إصلاح شجرة الحسابات
-                            </a>
-                            <a href="financial_accounts.php?zero_balances=1" class="btn btn-sm btn-danger rounded-pill px-3" onclick="return confirm('تنبيه هام جداً: هل أنت متأكد من رغبتك في تصفير جميع الأرصدة وحذف كافة الحركات والقيود المحاسبية بالكامل؟ لا يمكن التراجع عن هذا الإجراء!')">
-                                <i class="fas fa-trash-alt me-1"></i> تصفير كافة الأرصدة
-                            </a>
+                        <?php if ($isDeveloper): ?>
+                            <form method="post" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من رغبتك في إعادة بناء شجرة الحسابات تلقائياً بناءً على بادئات أكواد الحسابات؟ سيقوم هذا بربط كل حساب بوالده الصحيح وإصلاح أي انقطاع في الشجرة.');">
+                                <?php echo csrf_input(); ?>
+                                <input type="hidden" name="dangerous_financial_action" value="repair_tree">
+                                <button type="submit" class="btn btn-sm btn-warning rounded-pill px-3 text-dark fw-bold">
+                                    <i class="fas fa-tools me-1"></i> إصلاح شجرة الحسابات
+                                </button>
+                            </form>
+                            <form method="post" class="d-inline-block mb-0" onsubmit="return confirm('تنبيه هام جداً: هل أنت متأكد من رغبتك في تصفير جميع الأرصدة وحذف كافة الحركات والقيود المحاسبية بالكامل؟ لا يمكن التراجع عن هذا الإجراء!');">
+                                <?php echo csrf_input(); ?>
+                                <input type="hidden" name="dangerous_financial_action" value="zero_balances">
+                                <button type="submit" class="btn btn-sm btn-danger rounded-pill px-3">
+                                    <i class="fas fa-trash-alt me-1"></i> تصفير كافة الأرصدة
+                                </button>
+                            </form>
                         <?php endif; ?>
                         <div class="btn-group">
                         <button class="btn btn-sm btn-outline-secondary" onclick="expandAll()"><i class="fas fa-plus me-1"></i> توسيع الكل</button>
@@ -931,6 +992,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                         function renderTree($nodes, $level = 1)
                         {
                             global $all_balances;
+                            global $canManageFinancialAccounts;
                             foreach ($nodes as $node) {
                                 $hasChildren = !empty($node['children']);
                                 echo '<div class="tree-node" data-level="' . $level . '">';
@@ -998,7 +1060,13 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                                 // أزرار الإجراءات في الشجرة
                                 echo '<div class="ms-auto btn-group btn-group-sm">';
                                 echo '<button class="btn btn-link text-warning p-1" data-bs-toggle="modal" data-bs-target="#editAccountModal' . $node['id'] . '" title="تعديل"><i class="fas fa-edit"></i></button>';
-                                echo '<a href="financial_accounts.php?delete=' . $node['id'] . '" class="btn btn-link text-danger p-1" title="حذف" onclick="return confirm(\'هل أنت متأكد من حذف هذا الحساب؟\')"><i class="fas fa-trash"></i></a>';
+                                if ($canManageFinancialAccounts) {
+                                    echo '<form method="post" class="d-inline-block mb-0" onsubmit="return confirm(\'هل أنت متأكد من حذف هذا الحساب؟\')">';
+                                    echo csrf_input();
+                                    echo '<input type="hidden" name="delete_account" value="' . (int)$node['id'] . '">';
+                                    echo '<button type="submit" class="btn btn-link text-danger p-1" title="حذف"><i class="fas fa-trash"></i></button>';
+                                    echo '</form>';
+                                }
                                 echo '</div>';
 
                                 echo '</div>'; // end account-tree-item
@@ -1028,6 +1096,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
         <div class="modal-dialog">
             <div class="modal-content border-0 shadow">
                 <form method="POST">
+                    <?php echo csrf_input(); ?>
                     <div class="modal-header bg-primary text-white">
                         <h5 class="modal-title">تعديل الحساب: <?php echo htmlspecialchars($acc['account_name']); ?></h5>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -1042,7 +1111,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                             <label class="form-label fw-bold">نوع الحساب</label>
                             <select name="account_type" class="form-select" required <?php echo !empty($type_filter) ? 'readonly' : ''; ?>>
                                 <?php
-                                $types = ['box' => 'صندوق', 'bank' => 'بنك', 'agent' => 'وكيل', 'branch' => 'فرع', 'expense' => 'مصروف', 'income' => 'إيراد', 'asset' => 'أصول', 'liability' => 'خصوم', 'equity' => 'حقوق ملكية', 'receivable' => 'العملاء', 'payable' => 'الموردين', 'عميل' => 'عميل', 'مورد' => 'مورد', 'وكيل' => 'وكيل'];
+                                $types = ['income' => 'إيرادات', 'expense' => 'مصروفات', 'asset' => 'أصول', 'liability' => 'خصوم', 'equity' => 'حقوق ملكية'];
                                 foreach ($types as $k => $v): ?>
                                     <option value="<?php echo $k; ?>" <?php echo $acc['account_type'] == $k ? 'selected' : ''; ?>><?php echo $v; ?></option>
                                 <?php endforeach; ?>
@@ -1050,18 +1119,20 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">الربط مع شجرة الحسابات (الأب)</label>
-                            <select name="parent_id" class="form-select border-0 bg-light">
+                            <select name="parent_id" id="edit_account_parent_id_<?php echo $acc['id']; ?>" class="form-select border-0 bg-light">
                                 <option value="">-- بدون أب (حساب رئيسي) --</option>
                                 <?php foreach ($chart_accounts as $ca): ?>
-                                    <option value="<?php echo $ca['id']; ?>" <?php echo ($acc['parent_id'] ?? '') == $ca['id'] ? 'selected' : ''; ?>>
+                                    <option value="<?php echo $ca['id']; ?>" <?php echo ($acc['parent_id'] ?? '') == $ca['id'] ? 'selected' : ''; ?> data-type="<?php echo htmlspecialchars($ca['account_type']); ?>">
                                         <?php echo $ca['account_code'] . ' - ' . $ca['account_name_ar']; ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">الحد الائتماني</label>
-                            <input type="number" step="0.01" name="credit_limit" class="form-control" value="<?php echo $acc['credit_limit'] ?? '0.00'; ?>">
+                            <label class="form-label fw-bold">الحسابات الفرعية للأب المختار</label>
+                            <select id="edit_account_children_<?php echo $acc['id']; ?>" class="form-select border-0 bg-light" disabled>
+                                <option value="">-- اختر حساب أولاً --</option>
+                            </select>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">الحالة</label>
@@ -1111,6 +1182,131 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
             }
         });
     }
+
+    // Pass all accounts to JS
+    const allAccounts = <?php echo json_encode($all_accounts); ?>;
+    
+    // Function to update children dropdown
+    function updateChildrenDropdown(parentSelectId, childrenSelectId) {
+        const parentSelect = document.getElementById(parentSelectId);
+        const childrenSelect = document.getElementById(childrenSelectId);
+        
+        if (!parentSelect || !childrenSelect) return;
+        
+        const parentId = parentSelect.value;
+        
+        // Clear and reset children select
+        childrenSelect.innerHTML = '';
+        
+        if (!parentId) {
+            childrenSelect.disabled = true;
+            childrenSelect.innerHTML = '<option value="">-- اختر حساب أولاً --</option>';
+            return;
+        }
+        
+        // Filter children of this parent
+        const children = allAccounts.filter(account => account.parent_id == parentId);
+        
+        if (children.length === 0) {
+            childrenSelect.disabled = true;
+            childrenSelect.innerHTML = '<option value="">-- لا توجد حسابات فرعية --</option>';
+            return;
+        }
+        
+        childrenSelect.disabled = false;
+        childrenSelect.innerHTML = '<option value="">-- اختر حساب فرعي --</option>';
+        
+        children.forEach(child => {
+            const option = document.createElement('option');
+            option.value = child.id;
+            option.textContent = child.account_code + ' - ' + child.account_name_ar;
+            childrenSelect.appendChild(option);
+        });
+    }
+    
+    // Filter parent account dropdown based on selected account type
+    document.addEventListener('DOMContentLoaded', function() {
+        // Handle all account type selects (both add and edit)
+        document.querySelectorAll('select[name="account_type"]').forEach(function(accountTypeSelect) {
+            // Find the corresponding parent select
+            let parentAccountSelect = null;
+            let childrenAccountSelect = null;
+            if (accountTypeSelect.closest('#addAccountModal')) {
+                parentAccountSelect = document.getElementById('add_account_parent_id');
+                childrenAccountSelect = document.getElementById('add_account_children');
+            } else {
+                // It's an edit modal - find its ID
+                const modal = accountTypeSelect.closest('.modal');
+                if (modal) {
+                    const modalId = modal.id;
+                    if (modalId.startsWith('editAccountModal')) {
+                        const accId = modalId.replace('editAccountModal', '');
+                        parentAccountSelect = document.getElementById('edit_account_parent_id_' + accId);
+                        childrenAccountSelect = document.getElementById('edit_account_children_' + accId);
+                    }
+                }
+            }
+
+            if (accountTypeSelect && parentAccountSelect) {
+                const parentOptions = Array.from(parentAccountSelect.querySelectorAll('option'));
+
+                function filterParentAccounts() {
+                    const selectedType = accountTypeSelect.value;
+                    parentOptions.forEach(option => {
+                        if (option.value === '') {
+                            option.style.display = '';
+                        } else if (option.getAttribute('data-type') === selectedType) {
+                            option.style.display = '';
+                        } else {
+                            option.style.display = 'none';
+                        }
+                    });
+                    // Reset selected value if current is hidden
+                    const currentValue = parentAccountSelect.value;
+                    if (currentValue) {
+                        const currentOption = parentAccountSelect.querySelector('option[value="' + currentValue + '"]');
+                        if (currentOption && currentOption.style.display === 'none') {
+                            parentAccountSelect.value = '';
+                        }
+                    }
+                    // Update children dropdown
+                    if (childrenAccountSelect) {
+                        if (parentAccountSelect.id.startsWith('add_account')) {
+                            updateChildrenDropdown('add_account_parent_id', 'add_account_children');
+                        } else {
+                            const accId = parentAccountSelect.id.replace('edit_account_parent_id_', '');
+                            updateChildrenDropdown('edit_account_parent_id_' + accId, 'edit_account_children_' + accId);
+                        }
+                    }
+                }
+
+                accountTypeSelect.addEventListener('change', filterParentAccounts);
+                filterParentAccounts(); // Run on load
+                
+                // Add event listener for parent select change to update children
+                parentAccountSelect.addEventListener('change', function() {
+                    if (childrenAccountSelect) {
+                        if (parentAccountSelect.id.startsWith('add_account')) {
+                            updateChildrenDropdown('add_account_parent_id', 'add_account_children');
+                        } else {
+                            const accId = parentAccountSelect.id.replace('edit_account_parent_id_', '');
+                            updateChildrenDropdown('edit_account_parent_id_' + accId, 'edit_account_children_' + accId);
+                        }
+                    }
+                });
+                
+                // Initial children dropdown update
+                if (childrenAccountSelect) {
+                    if (parentAccountSelect.id.startsWith('add_account')) {
+                        updateChildrenDropdown('add_account_parent_id', 'add_account_children');
+                    } else {
+                        const accId = parentAccountSelect.id.replace('edit_account_parent_id_', '');
+                        updateChildrenDropdown('edit_account_parent_id_' + accId, 'edit_account_children_' + accId);
+                    }
+                }
+            }
+        });
+    });
 </script>
 </div>
 
@@ -1119,6 +1315,7 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
     <div class="modal-dialog modal-lg">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white border-0">
                     <h5 class="modal-title"><i class="fas fa-plus-circle me-2"></i> إضافة حساب مالي جديد</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -1132,12 +1329,11 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold">نوع الحساب</label>
                             <select name="account_type" class="form-select border-0 bg-light" required <?php echo !empty($type_filter) ? 'readonly' : ''; ?>>
-                                <option value="box" <?php echo $type_filter === 'box' ? 'selected' : ''; ?>>صندوق</option>
-                                <option value="bank" <?php echo $type_filter === 'bank' ? 'selected' : ''; ?>>بنك</option>
-                                <option value="agent" <?php echo $type_filter === 'agent' ? 'selected' : ''; ?>>حساب وكيل</option>
-                                <option value="branch" <?php echo $type_filter === 'branch' ? 'selected' : ''; ?>>حساب فرع</option>
-                                <option value="expense" <?php echo $type_filter === 'expense' ? 'selected' : ''; ?>>مصروفات</option>
-                                <option value="income" <?php echo $type_filter === 'income' ? 'selected' : ''; ?>>إيرادات</option>
+                                <?php
+                                $types = ['income' => 'إيرادات', 'expense' => 'مصروفات', 'asset' => 'أصول', 'liability' => 'خصوم', 'equity' => 'حقوق ملكية'];
+                                foreach ($types as $k => $v): ?>
+                                    <option value="<?php echo $k; ?>" <?php echo $type_filter === $k ? 'selected' : ''; ?>><?php echo $v; ?></option>
+                                <?php endforeach; ?>
                             </select>
                             <?php if (!empty($type_filter)): ?>
                                 <input type="hidden" name="account_type" value="<?php echo $type_filter; ?>">
@@ -1145,40 +1341,22 @@ function getUnifiedNetBalance($balances, $baseCurrency) {
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold">الربط مع شجرة الحسابات (الأب)</label>
-                            <select name="parent_id" class="form-select border-0 bg-light">
+                            <select name="parent_id" id="add_account_parent_id" class="form-select border-0 bg-light">
                                 <option value="">-- بدون أب (حساب رئيسي) --</option>
                                 <?php foreach ($chart_accounts as $ca): ?>
-                                    <option value="<?php echo $ca['id']; ?>"><?php echo $ca['account_code'] . ' - ' . $ca['account_name_ar']; ?></option>
+                                    <option value="<?php echo $ca['id']; ?>" data-type="<?php echo htmlspecialchars($ca['account_type']); ?>">
+                                        <?php echo $ca['account_code'] . ' - ' . $ca['account_name_ar']; ?>
+                                    </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">المستخدم المسؤول (اختياري)</label>
-                            <select name="linked_user_id" class="form-select border-0 bg-light">
-                                <option value="">لا يوجد</option>
-                                <?php foreach ($users_list as $u): ?>
-                                    <option value="<?php echo $u['id']; ?>"><?php echo htmlspecialchars($u['username']); ?></option>
-                                <?php endforeach; ?>
+                            <label class="form-label fw-bold">الحسابات الفرعية للأب المختار</label>
+                            <select id="add_account_children" class="form-select border-0 bg-light" disabled>
+                                <option value="">-- اختر حساب أولاً --</option>
                             </select>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">الفرع التابع له</label>
-                            <select name="branch_id" class="form-select border-0 bg-light">
-                                <option value="">لا يوجد (عام)</option>
-                                <?php foreach ($branches as $b): ?>
-                                    <option value="<?php echo $b['id']; ?>"><?php echo htmlspecialchars($b['branch_name']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold">الوكيل التابع له</label>
-                            <select name="agent_id" class="form-select border-0 bg-light">
-                                <option value="">لا يوجد</option>
-                                <?php foreach ($agents as $a): ?>
-                                    <option value="<?php echo $a['id']; ?>"><?php echo htmlspecialchars($a['agent_name']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
+
                         <div class="col-12 mb-4">
                             <hr>
                             <h6 class="fw-bold text-primary mb-3">الرصيد الافتتاحي (العملة الأولى):</h6>

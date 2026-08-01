@@ -8,6 +8,10 @@ if ($user_role === 'editor' && empty($settings['allow_editor_news'])) {
     exit();
 }
 
+if (isset($_GET['delete']) || isset($_GET['toggle'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // إنشاء جدول الأخبار إذا لم يكن موجوداً
 try {
     $pdo->exec("
@@ -26,6 +30,9 @@ try {
 
 // إضافة خبر
 if (isset($_POST['add_news'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); window.location.href='news.php';</script>");
+    }
     $title = trim($_POST['title'] ?? '');
     $content = trim($_POST['content'] ?? '');
     $is_active = isset($_POST['is_active']) ? 1 : 0;
@@ -44,6 +51,9 @@ if (isset($_POST['add_news'])) {
 
 // تعديل خبر
 if (isset($_POST['edit_news'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); window.location.href='news.php';</script>");
+    }
     $news_id = (int)($_POST['news_id'] ?? 0);
     $title = trim($_POST['title'] ?? '');
     $content = trim($_POST['content'] ?? '');
@@ -61,9 +71,12 @@ if (isset($_POST['edit_news'])) {
     exit();
 }
 
-// حذف خبر
-if (isset($_GET['delete'])) {
-    $news_id = (int)$_GET['delete'];
+// حذف خبر عبر POST + CSRF
+if (isset($_POST['delete_news'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); window.location.href='news.php';</script>");
+    }
+    $news_id = (int)$_POST['delete_news'];
 
     if ($news_id > 0) {
         $stmt = $pdo->prepare("DELETE FROM news WHERE id = ?");
@@ -74,9 +87,12 @@ if (isset($_GET['delete'])) {
     exit();
 }
 
-// تغيير الحالة
-if (isset($_GET['toggle'])) {
-    $news_id = (int)$_GET['toggle'];
+// تغيير الحالة عبر POST + CSRF
+if (isset($_POST['toggle_news'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); window.location.href='news.php';</script>");
+    }
+    $news_id = (int)$_POST['toggle_news'];
 
     if ($news_id > 0) {
         $stmt = $pdo->prepare("UPDATE news SET is_active = IF(is_active = 1, 0, 1) WHERE id = ?");
@@ -130,6 +146,10 @@ foreach ($news_list as $item) {
         <div class="alert alert-success">تم تعديل الخبر بنجاح.</div>
     <?php endif; ?>
 
+    <?php if (isset($error)): ?>
+        <div class="alert alert-danger"><?php echo $error; ?></div>
+    <?php endif; ?>
+
     <?php if (isset($_GET['deleted'])): ?>
         <div class="alert alert-success">تم حذف الخبر بنجاح.</div>
     <?php endif; ?>
@@ -175,6 +195,7 @@ foreach ($news_list as $item) {
         </div>
         <div class="card-body">
             <form method="post">
+                <?php echo csrf_input(); ?>
                 <?php if ($edit_news): ?>
                     <input type="hidden" name="news_id" value="<?php echo (int)$edit_news['id']; ?>">
                 <?php endif; ?>
@@ -275,16 +296,20 @@ foreach ($news_list as $item) {
                                     <td>
                                         <div class="d-flex gap-1 flex-wrap">
                                             <a href="news.php?edit=<?php echo (int)$news['id']; ?>" class="btn btn-sm btn-primary">تعديل</a>
-                                            <a href="news.php?toggle=<?php echo (int)$news['id']; ?>" class="btn btn-sm btn-warning">
-                                                <?php echo ((int)$news['is_active'] === 1) ? 'تعطيل' : 'تفعيل'; ?>
-                                            </a>
-                                            <a
-                                                href="news.php?delete=<?php echo (int)$news['id']; ?>"
-                                                class="btn btn-sm btn-danger"
-                                                onclick="return confirm('هل أنت متأكد من حذف هذا الخبر؟');"
-                                            >
-                                                حذف
-                                            </a>
+                                            <form method="post" class="d-inline-block mb-0">
+                                                <?php echo csrf_input(); ?>
+                                                <input type="hidden" name="toggle_news" value="<?php echo (int)$news['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-warning">
+                                                    <?php echo ((int)$news['is_active'] === 1) ? 'تعطيل' : 'تفعيل'; ?>
+                                                </button>
+                                            </form>
+                                            <form method="post" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا الخبر؟');">
+                                                <?php echo csrf_input(); ?>
+                                                <input type="hidden" name="delete_news" value="<?php echo (int)$news['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-danger">
+                                                    حذف
+                                                </button>
+                                            </form>
                                         </div>
                                     </td>
                                 </tr>

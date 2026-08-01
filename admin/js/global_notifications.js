@@ -158,7 +158,10 @@
     // تحديث العداد فوق الأيقونة
     function updateMessageBadge(count) {
         const badge = document.getElementById('topMessagesBadge');
-        const messageLink = document.querySelector('a[href="internal_messages.php"]');
+        const messageLink = Array.from(document.querySelectorAll('a[href]')).find(a => {
+            const href = a.getAttribute('href') || '';
+            return href === 'internal_messages.php' || href.endsWith('/internal_messages.php');
+        });
         
         if(count > 0) {
             if(badge) {
@@ -300,7 +303,10 @@
                 });
                 
                 // إضافة الزر قبل أيقونة الرسائل
-                const messageLink = document.querySelector('a[href="internal_messages.php"]');
+                const messageLink = Array.from(document.querySelectorAll('a[href]')).find(a => {
+                    const href = a.getAttribute('href') || '';
+                    return href === 'internal_messages.php' || href.endsWith('/internal_messages.php');
+                });
                 if (messageLink && messageLink.parentNode) {
                     messageLink.parentNode.insertBefore(btn, messageLink);
                 }
@@ -355,7 +361,7 @@
 
     // مراقبة الرسائل عند الضغط على أيقونة الرسائل
     document.addEventListener('click', function(e) {
-        const messageLink = e.target.closest('a[href="internal_messages.php"]');
+        const messageLink = e.target.closest('a[href$="/internal_messages.php"], a[href="internal_messages.php"]');
         if(messageLink) {
             // إعادة تعيين العداد عند الدخول للمحادثات
             setTimeout(() => {

@@ -28,11 +28,16 @@ try {
 
     if ($ft['status'] === 'posted') throw new Exception("المعاملة مُرحلة بالفعل.");
 
-    // 3. تحديث حالة المعاملة إلى posted
-    $pdo->prepare("UPDATE financial_transactions SET status = 'posted' WHERE id = ?")->execute([$ft['id']]);
+    $stmt_lines = $pdo->prepare("SELECT COUNT(*) FROM journal_lines WHERE financial_transaction_id = ?");
+    $stmt_lines->execute([$ft['id']]);
+    $lines_count = (int)$stmt_lines->fetchColumn();
+    if ($lines_count === 0) {
+        throw new Exception("لا يمكن ترحيل عملية الصرف بدون قيود يومية مرتبطة.");
+    }
 
-    // 4. تحديث الأرصدة (عبر الإجراء المخزن لتحديث الأرصدة)
-    $pdo->prepare("CALL sp_update_account_balances(?)")->execute([$ft['id']]);
+    // 3. تحديث حالة المعاملة فقط بعد التأكد من وجود القيود اليومية.
+    $pdo->prepare("UPDATE financial_transactions SET status = 'posted', posted_by = ?, posted_at = NOW(), posted_ip = ? WHERE id = ? AND status = 'draft'")
+        ->execute([$user_id, $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1', $ft['id']]);
 
     $pdo->commit();
     echo json_encode(['success' => true, 'transaction_number' => $cet['transaction_number']]);

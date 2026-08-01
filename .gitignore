@@ -1,0 +1,32 @@
+# Session files - should never be committed
+sessions/*
+!sessions/.htaccess
+
+# Error logs
+*.log
+admin/db_error.log
+admin/php_errors.log
+
+# Environment and sensitive config
+.env
+.env.local
+.env.*.local
+
+# IDE settings
+.vscode/
+
+# Temporary/test files
+tmp_*
+test_*
+*_test.php
+*_test_*.php
+
+# Database backups
+storage/db_backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Supabase local
+supabase/.temp/

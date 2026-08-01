@@ -27,36 +27,11 @@ try {
 
     if ($ft['status'] !== 'posted') throw new Exception("المعاملة ليست مُرحلة.");
 
-    // 3. عكس الأرصدة (جلب أسطر القيد ثم عكسها)
-    $stmt_jl = $pdo->prepare("
-        SELECT jl.account_id, jl.debit, jl.credit, jl.currency_id, ua.normal_balance
-        FROM journal_lines jl
-        JOIN unified_accounts ua ON jl.account_id = ua.id
-        WHERE jl.financial_transaction_id = ?
-    ");
-    $stmt_jl->execute([$ft['id']]);
-    $lines = $stmt_jl->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($lines as $line) {
-        $amount = $line['debit'] - $line['credit'];
-        
-        // إذا كان الحساب مدينًا (normal_balance = 'debit')، نقوم بطرح المبلغ
-        // إذا كان الحساب دائنًا (normal_balance = 'credit')، نقوم بطرح المبلغ (العكس)
-        if ($line['normal_balance'] === 'debit') {
-            $pdo->prepare("
-                UPDATE account_balances_unified 
-                SET current_balance = current_balance - ? 
-                WHERE account_id = ? AND currency_id = ?
-            ")->execute([$amount, $line['account_id'], $line['currency_id']]);
-        } else {
-            $amount_c = $line['credit'] - $line['debit'];
-            $pdo->prepare("
-                UPDATE account_balances_unified 
-                SET current_balance = current_balance - ? 
-                WHERE account_id = ? AND currency_id = ?
-            ")->execute([$amount_c, $line['account_id'], $line['currency_id']]);
-        }
+    // 3. عكس الأرصدة عند الحاجة فقط، ثم حذف القيود ليقوم الـ trigger بالعكس تلقائيا.
+    if (!balances_triggers_enabled($pdo)) {
+        apply_transaction_balances($pdo, (int)$ft['id'], -1);
     }
+    $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id = ?")->execute([$ft['id']]);
 
     // 4. تحديث حالة المعاملة إلى draft
     $pdo->prepare("UPDATE financial_transactions SET status = 'draft' WHERE id = ?")->execute([$ft['id']]);

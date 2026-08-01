@@ -1,8 +1,14 @@
 html.fa-fallback i.fas,
 html.fa-fallback i.far,
 html.fa-fallback i.fab,
+html.fa-fallback i.fa-solid,
+html.fa-fallback i.fa-regular,
+html.fa-fallback i.fa-brands,
+html.fa-fallback i.fa-light,
+html.fa-fallback i.fa-thin,
+html.fa-fallback i.fa-duotone,
 html.fa-fallback i.fa {
-    font-family: "Segoe MDL2 Assets", "Segoe UI Symbol", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol" !important;
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
     font-style: normal !important;
     font-weight: 400 !important;
     speak: never;
@@ -14,71 +20,71 @@ html.fa-fallback i.fa {
 }
 
 html.fa-fallback i[class*="fa-"]::before {
-    content: "\E10F";
-    font-family: "Segoe MDL2 Assets", "Segoe UI Symbol", -apple-system, sans-serif !important;
+    content: "■";
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", -apple-system, sans-serif !important;
 }
 
-html.fa-fallback i.fa-bars::before { content: "\E700" !important; }
-html.fa-fallback i.fa-home::before { content: "\E80F" !important; }
+html.fa-fallback i.fa-bars::before { content: "☰" !important; }
+html.fa-fallback i.fa-home::before { content: "⌂" !important; }
 html.fa-fallback i.fa-tachometer-alt::before,
 html.fa-fallback i.fa-gauge-high::before,
-html.fa-fallback i.fa-dashboard::before { content: "\E9D2" !important; }
+html.fa-fallback i.fa-dashboard::before { content: "⏱" !important; }
 html.fa-fallback i.fa-search::before,
 html.fa-fallback i.fa-search-plus::before,
-html.fa-fallback i.fa-search-minus::before { content: "\E721" !important; }
+html.fa-fallback i.fa-search-minus::before { content: "🔍" !important; }
 html.fa-fallback i.fa-plus::before,
-html.fa-fallback i.fa-plus-circle::before { content: "\E710" !important; }
+html.fa-fallback i.fa-plus-circle::before { content: "＋" !important; }
 html.fa-fallback i.fa-minus::before,
-html.fa-fallback i.fa-minus-circle::before { content: "\E738" !important; }
+html.fa-fallback i.fa-minus-circle::before { content: "－" !important; }
 html.fa-fallback i.fa-times::before,
 html.fa-fallback i.fa-times-circle::before,
-html.fa-fallback i.fa-xmark::before { content: "\E711" !important; }
+html.fa-fallback i.fa-xmark::before { content: "✕" !important; }
 html.fa-fallback i.fa-check::before,
 html.fa-fallback i.fa-check-circle::before,
 html.fa-fallback i.fa-check-double::before,
-html.fa-fallback i.fa-calendar-check::before { content: "\E73E" !important; }
+html.fa-fallback i.fa-calendar-check::before { content: "✓" !important; }
 html.fa-fallback i.fa-edit::before,
 html.fa-fallback i.fa-user-edit::before,
-html.fa-fallback i.fa-pen::before { content: "\E70F" !important; }
+html.fa-fallback i.fa-pen::before { content: "✎" !important; }
 html.fa-fallback i.fa-trash::before,
-html.fa-fallback i.fa-trash-alt::before { content: "\E74D" !important; }
-html.fa-fallback i.fa-save::before { content: "\E74E" !important; }
-html.fa-fallback i.fa-print::before { content: "\E749" !important; }
-html.fa-fallback i.fa-eye::before { content: "\E890" !important; }
-html.fa-fallback i.fa-eye-slash::before { content: "\ED1A" !important; }
-html.fa-fallback i.fa-filter::before { content: "\E71C" !important; }
+html.fa-fallback i.fa-trash-alt::before { content: "🗑" !important; }
+html.fa-fallback i.fa-save::before { content: "💾" !important; }
+html.fa-fallback i.fa-print::before { content: "🖨" !important; }
+html.fa-fallback i.fa-eye::before { content: "👁" !important; }
+html.fa-fallback i.fa-eye-slash::before { content: "🙈" !important; }
+html.fa-fallback i.fa-filter::before { content: "⎇" !important; }
 html.fa-fallback i.fa-redo::before,
 html.fa-fallback i.fa-undo::before,
 html.fa-fallback i.fa-history::before,
 html.fa-fallback i.fa-sync::before,
 html.fa-fallback i.fa-sync-alt::before,
-html.fa-fallback i.fa-rotate::before { content: "\E72C" !important; }
+html.fa-fallback i.fa-rotate::before { content: "↻" !important; }
 html.fa-fallback i.fa-arrow-right::before,
-html.fa-fallback i.fa-long-arrow-alt-left::before { content: "\E72A" !important; }
-html.fa-fallback i.fa-arrow-left::before { content: "\E72B" !important; }
+html.fa-fallback i.fa-long-arrow-alt-left::before { content: "→" !important; }
+html.fa-fallback i.fa-arrow-left::before { content: "←" !important; }
 html.fa-fallback i.fa-arrow-up::before,
-html.fa-fallback i.fa-arrow-alt-circle-up::before { content: "\E74A" !important; }
+html.fa-fallback i.fa-arrow-alt-circle-up::before { content: "↑" !important; }
 html.fa-fallback i.fa-arrow-down::before,
-html.fa-fallback i.fa-arrow-alt-circle-down::before { content: "\E74B" !important; }
-html.fa-fallback i.fa-chevron-left::before { content: "\E76B" !important; }
-html.fa-fallback i.fa-chevron-right::before { content: "\E76C" !important; }
+html.fa-fallback i.fa-arrow-alt-circle-down::before { content: "↓" !important; }
+html.fa-fallback i.fa-chevron-left::before { content: "‹" !important; }
+html.fa-fallback i.fa-chevron-right::before { content: "›" !important; }
 html.fa-fallback i.fa-chevron-down::before,
-html.fa-fallback i.fa-caret-down::before { content: "\E70D" !important; }
-html.fa-fallback i.fa-caret-up::before { content: "\E70E" !important; }
-html.fa-fallback i.fa-ellipsis-h::before { content: "\E712" !important; }
-html.fa-fallback i.fa-ellipsis-v::before { content: "\E712" !important; }
+html.fa-fallback i.fa-caret-down::before { content: "▾" !important; }
+html.fa-fallback i.fa-caret-up::before { content: "▴" !important; }
+html.fa-fallback i.fa-ellipsis-h::before { content: "⋯" !important; }
+html.fa-fallback i.fa-ellipsis-v::before { content: "⋮" !important; }
 html.fa-fallback i.fa-info-circle::before,
-html.fa-fallback i.fa-question-circle::before { content: "\E946" !important; }
+html.fa-fallback i.fa-question-circle::before { content: "ℹ" !important; }
 html.fa-fallback i.fa-exclamation-circle::before,
-html.fa-fallback i.fa-exclamation-triangle::before { content: "\E7BA" !important; }
-html.fa-fallback i.fa-bell::before { content: "\E7F4" !important; }
-html.fa-fallback i.fa-bell-slash::before { content: "\E7F5" !important; }
+html.fa-fallback i.fa-exclamation-triangle::before { content: "⚠" !important; }
+html.fa-fallback i.fa-bell::before { content: "🔔" !important; }
+html.fa-fallback i.fa-bell-slash::before { content: "🔕" !important; }
 html.fa-fallback i.fa-envelope::before,
 html.fa-fallback i.fa-envelope-open::before,
-html.fa-fallback i.fa-envelope-open-text::before { content: "\E715" !important; }
+html.fa-fallback i.fa-envelope-open-text::before { content: "✉" !important; }
 html.fa-fallback i.fa-comments::before,
 html.fa-fallback i.fa-comment-dots::before,
-html.fa-fallback i.fa-comment::before { content: "\E8F2" !important; }
+html.fa-fallback i.fa-comment::before { content: "💬" !important; }
 html.fa-fallback i.fa-user::before,
 html.fa-fallback i.fa-user-circle::before,
 html.fa-fallback i.fa-user-check::before,
@@ -87,57 +93,57 @@ html.fa-fallback i.fa-user-md::before,
 html.fa-fallback i.fa-user-plus::before,
 html.fa-fallback i.fa-user-shield::before,
 html.fa-fallback i.fa-user-tag::before,
-html.fa-fallback i.fa-user-tie::before { content: "\E77B" !important; }
+html.fa-fallback i.fa-user-tie::before { content: "👤" !important; }
 html.fa-fallback i.fa-users::before,
 html.fa-fallback i.fa-user-friends::before,
 html.fa-fallback i.fa-users-cog::before,
-html.fa-fallback i.fa-users-gear::before { content: "\E716" !important; }
-html.fa-fallback i.fa-lock::before { content: "\E72E" !important; }
-html.fa-fallback i.fa-sign-in-alt::before { content: "\E8B7" !important; }
-html.fa-fallback i.fa-sign-out-alt::before { content: "\E8AC" !important; }
+html.fa-fallback i.fa-users-gear::before { content: "👥" !important; }
+html.fa-fallback i.fa-lock::before { content: "🔒" !important; }
+html.fa-fallback i.fa-sign-in-alt::before { content: "⎆" !important; }
+html.fa-fallback i.fa-sign-out-alt::before { content: "⎋" !important; }
 html.fa-fallback i.fa-cog::before,
 html.fa-fallback i.fa-cogs::before,
 html.fa-fallback i.fa-sliders-h::before,
-html.fa-fallback i.fa-gear::before { content: "\E713" !important; }
-html.fa-fallback i.fa-moon::before { content: "\E708" !important; }
-html.fa-fallback i.fa-sun::before { content: "\E706" !important; }
-html.fa-fallback i.fa-expand::before { content: "\E740" !important; }
-html.fa-fallback i.fa-compress::before { content: "\E73F" !important; }
-html.fa-fallback i.fa-volume-up::before { content: "\E767" !important; }
+html.fa-fallback i.fa-gear::before { content: "⚙" !important; }
+html.fa-fallback i.fa-moon::before { content: "🌙" !important; }
+html.fa-fallback i.fa-sun::before { content: "☀" !important; }
+html.fa-fallback i.fa-expand::before { content: "⤢" !important; }
+html.fa-fallback i.fa-compress::before { content: "⤡" !important; }
+html.fa-fallback i.fa-volume-up::before { content: "🔊" !important; }
 html.fa-fallback i.fa-plane::before,
-html.fa-fallback i.fa-plane-departure::before { content: "\E709" !important; }
-html.fa-fallback i.fa-bus::before { content: "\E806" !important; }
+html.fa-fallback i.fa-plane-departure::before { content: "✈" !important; }
+html.fa-fallback i.fa-bus::before { content: "🚌" !important; }
 html.fa-fallback i.fa-route::before,
 html.fa-fallback i.fa-map-marker-alt::before,
-html.fa-fallback i.fa-map-marked-alt::before { content: "\E707" !important; }
+html.fa-fallback i.fa-map-marked-alt::before { content: "📍" !important; }
 html.fa-fallback i.fa-city::before,
 html.fa-fallback i.fa-building::before,
 html.fa-fallback i.fa-university::before,
-html.fa-fallback i.fa-hotel::before { content: "\E80F" !important; }
+html.fa-fallback i.fa-hotel::before { content: "🏢" !important; }
 html.fa-fallback i.fa-passport::before,
 html.fa-fallback i.fa-id-card::before,
-html.fa-fallback i.fa-address-card::before { content: "\E8D4" !important; }
+html.fa-fallback i.fa-address-card::before { content: "🛂" !important; }
 html.fa-fallback i.fa-file::before,
 html.fa-fallback i.fa-file-alt::before,
 html.fa-fallback i.fa-file-contract::before,
 html.fa-fallback i.fa-file-invoice::before,
 html.fa-fallback i.fa-file-invoice-dollar::before,
 html.fa-fallback i.fa-file-pdf::before,
-html.fa-fallback i.fa-file-signature::before { content: "\E8A5" !important; }
+html.fa-fallback i.fa-file-signature::before { content: "📄" !important; }
 html.fa-fallback i.fa-folder::before,
-html.fa-fallback i.fa-folder-open::before { content: "\E8B7" !important; }
+html.fa-fallback i.fa-folder-open::before { content: "📁" !important; }
 html.fa-fallback i.fa-database::before,
-html.fa-fallback i.fa-hdd::before { content: "\E8D7" !important; }
+html.fa-fallback i.fa-hdd::before { content: "💾" !important; }
 html.fa-fallback i.fa-calendar-alt::before,
 html.fa-fallback i.fa-calendar-day::before,
-html.fa-fallback i.fa-calendar-times::before { content: "\E787" !important; }
+html.fa-fallback i.fa-calendar-times::before { content: "📅" !important; }
 html.fa-fallback i.fa-clock::before,
 html.fa-fallback i.fa-clock-rotate-left::before,
-html.fa-fallback i.fa-hourglass-start::before { content: "\E823" !important; }
+html.fa-fallback i.fa-hourglass-start::before { content: "⏰" !important; }
 html.fa-fallback i.fa-chart-area::before,
 html.fa-fallback i.fa-chart-bar::before,
 html.fa-fallback i.fa-chart-line::before,
-html.fa-fallback i.fa-chart-pie::before { content: "\E9D9" !important; }
+html.fa-fallback i.fa-chart-pie::before { content: "📈" !important; }
 html.fa-fallback i.fa-dollar-sign::before,
 html.fa-fallback i.fa-coins::before,
 html.fa-fallback i.fa-cash-register::before,
@@ -147,40 +153,40 @@ html.fa-fallback i.fa-money-check-alt::before,
 html.fa-fallback i.fa-wallet::before,
 html.fa-fallback i.fa-piggy-bank::before,
 html.fa-fallback i.fa-hand-holding-dollar::before,
-html.fa-fallback i.fa-hand-holding-usd::before { content: "\EAFD" !important; }
+html.fa-fallback i.fa-hand-holding-usd::before { content: "💰" !important; }
 html.fa-fallback i.fa-receipt::before,
 html.fa-fallback i.fa-barcode::before,
-html.fa-fallback i.fa-qrcode::before { content: "\E8A5" !important; }
+html.fa-fallback i.fa-qrcode::before { content: "🧾" !important; }
 html.fa-fallback i.fa-phone::before,
 html.fa-fallback i.fa-phone-alt::before,
-html.fa-fallback i.fa-headset::before { content: "\E717" !important; }
+html.fa-fallback i.fa-headset::before { content: "📞" !important; }
 html.fa-fallback i.fa-globe::before,
-html.fa-fallback i.fa-globe-americas::before { content: "\E774" !important; }
+html.fa-fallback i.fa-globe-americas::before { content: "🌐" !important; }
 html.fa-fallback i.fa-link::before,
-html.fa-fallback i.fa-external-link-alt::before { content: "\E71B" !important; }
-html.fa-fallback i.fa-download::before { content: "\E896" !important; }
-html.fa-fallback i.fa-upload::before { content: "\E898" !important; }
+html.fa-fallback i.fa-external-link-alt::before { content: "🔗" !important; }
+html.fa-fallback i.fa-download::before { content: "⬇" !important; }
+html.fa-fallback i.fa-upload::before { content: "⬆" !important; }
 html.fa-fallback i.fa-paper-plane::before,
 html.fa-fallback i.fa-telegram::before,
-html.fa-fallback i.fa-telegram-plane::before { content: "\E724" !important; }
-html.fa-fallback i.fa-paperclip::before { content: "\E723" !important; }
+html.fa-fallback i.fa-telegram-plane::before { content: "📤" !important; }
+html.fa-fallback i.fa-paperclip::before { content: "📎" !important; }
 html.fa-fallback i.fa-image::before,
 html.fa-fallback i.fa-images::before,
-html.fa-fallback i.fa-camera::before { content: "\E722" !important; }
+html.fa-fallback i.fa-camera::before { content: "🖼" !important; }
 html.fa-fallback i.fa-palette::before,
-html.fa-fallback i.fa-paint-brush::before { content: "\E790" !important; }
-html.fa-fallback i.fa-star::before { content: "\E734" !important; }
-html.fa-fallback i.fa-bolt::before { content: "\E945" !important; }
+html.fa-fallback i.fa-paint-brush::before { content: "🎨" !important; }
+html.fa-fallback i.fa-star::before { content: "★" !important; }
+html.fa-fallback i.fa-bolt::before { content: "⚡" !important; }
 html.fa-fallback i.fa-shield-alt::before,
-html.fa-fallback i.fa-check-shield::before { content: "\EA18" !important; }
+html.fa-fallback i.fa-check-shield::before { content: "🛡" !important; }
 html.fa-fallback i.fa-tasks::before,
 html.fa-fallback i.fa-list::before,
 html.fa-fallback i.fa-list-check::before,
 html.fa-fallback i.fa-list-ul::before,
-html.fa-fallback i.fa-clipboard-list::before { content: "\E8FD" !important; }
+html.fa-fallback i.fa-clipboard-list::before { content: "☑" !important; }
 html.fa-fallback i.fa-table::before,
-html.fa-fallback i.fa-columns::before { content: "\E80A" !important; }
+html.fa-fallback i.fa-columns::before { content: "▦" !important; }
 html.fa-fallback i.fa-tag::before,
-html.fa-fallback i.fa-tags::before { content: "\E8EC" !important; }
+html.fa-fallback i.fa-tags::before { content: "🏷" !important; }
 html.fa-fallback i.fa-code::before,
-html.fa-fallback i.fa-code-branch::before { content: "\E943" !important; }
+html.fa-fallback i.fa-code-branch::before { content: "</>" !important; }

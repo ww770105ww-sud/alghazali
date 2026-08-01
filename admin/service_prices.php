@@ -7,6 +7,10 @@ if (!$is_admin && !has_permission('view_service_prices')) {
     exit();
 }
 
+if (isset($_GET['delete'])) {
+    $error = "تم تعطيل تنفيذ الإجراءات الحساسة عبر الرابط المباشر. استخدم النماذج الداخلية المحمية فقط.";
+}
+
 // تحديث تلقائي للجدول عند الحاجة
 try {
     $check_customer = $pdo->query("SHOW COLUMNS FROM `service_prices` LIKE 'customer_id'")->fetch();
@@ -24,6 +28,9 @@ try {
 
 // إضافة سعر خدمة جديد
 if (isset($_POST['add_price'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='service_prices.php';</script>");
+    }
     $service_id = $_POST['service_id'];
     $target_type = $_POST['target_type'];
     
@@ -60,6 +67,9 @@ if (isset($_POST['add_price'])) {
 
 // تحديث سعر خدمة
 if (isset($_POST['update_price'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='service_prices.php';</script>");
+    }
     $id = $_POST['id'];
     $service_id = $_POST['service_id'];
     $target_type = $_POST['target_type'];
@@ -95,9 +105,12 @@ if (isset($_POST['update_price'])) {
     }
 }
 
-// حذف سعر خدمة
-if (isset($_GET['delete'])) {
-    $id = $_GET['delete'];
+// حذف سعر خدمة عبر POST + CSRF
+if (isset($_POST['delete_price'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        die("<script>alert('رمز الأمان غير صالح'); location.href='service_prices.php';</script>");
+    }
+    $id = (int)$_POST['delete_price'];
     try {
         $pdo->prepare("DELETE FROM service_prices WHERE id = ?")->execute([$id]);
         echo "<script>location.href='service_prices.php?success=3';</script>";
@@ -209,9 +222,13 @@ $currencies = $pdo->query("SELECT id, currency_name FROM currencies")->fetchAll(
                                     <button class="btn btn-sm btn-outline-primary me-1" data-bs-toggle="modal" data-bs-target="#editPriceModal<?php echo $price['id']; ?>">
                                         <i class="fas fa-edit"></i> تعديل
                                     </button>
-                                    <a href="service_prices.php?delete=<?php echo $price['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('هل أنت متأكد من حذف هذا السعر؟')">
-                                        <i class="fas fa-trash"></i> حذف
-                                    </a>
+                                    <form method="POST" class="d-inline-block mb-0" onsubmit="return confirm('هل أنت متأكد من حذف هذا السعر؟')">
+                                        <?php echo csrf_input(); ?>
+                                        <input type="hidden" name="delete_price" value="<?php echo $price['id']; ?>">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="fas fa-trash"></i> حذف
+                                        </button>
+                                    </form>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -228,6 +245,7 @@ $currencies = $pdo->query("SELECT id, currency_name FROM currencies")->fetchAll(
         <div class="modal-dialog">
             <div class="modal-content border-0 shadow-lg rounded-4">
                 <form method="POST">
+                    <?php echo csrf_input(); ?>
                     <div class="modal-header bg-primary text-white border-0 py-3">
                         <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل سعر الخدمة</h5>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -343,6 +361,7 @@ $currencies = $pdo->query("SELECT id, currency_name FROM currencies")->fetchAll(
     <div class="modal-dialog">
         <div class="modal-content border-0 shadow-lg rounded-4">
             <form method="POST">
+                <?php echo csrf_input(); ?>
                 <div class="modal-header bg-primary text-white border-0 py-3">
                     <h5 class="modal-title fw-bold"><i class="fas fa-plus-circle me-2"></i> إضافة سعر خدمة جديد</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>

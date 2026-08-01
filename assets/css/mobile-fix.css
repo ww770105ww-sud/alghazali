@@ -1,77 +1,72 @@
-/* تحسينات عامة للهاتف */
+/* Mobile Fixes for Receipts and Payments */
 @media (max-width: 768px) {
-    /* تحسين الحاويات والمسافات */
-    .container, .container-fluid {
-        padding-left: 10px !important;
-        padding-right: 10px !important;
+    /* تفعيل التمرير الجانبي للجداول */
+    .apple-card {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 15px;
     }
     
-    /* تحسين الجداول لتصبح بطاقات */
-    .table-responsive {
-        border: none !important;
+    .apple-table {
+        min-width: 800px !important; /* ضمان عرض أدنى للجداول لمنع تداخل الأعمدة */
+        width: 100% !important;
     }
-    
-    .table-responsive table thead {
-        display: none !important;
-    }
-    
-    .table-responsive table tbody tr {
-        display: block !important;
-        margin-bottom: 15px !important;
-        border: 1px solid #dee2e6 !important;
-        border-radius: 12px !important;
-        padding: 10px !important;
-        background: #fff !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
-    }
-    
-    .table-responsive table tbody td {
-        display: flex !important;
-        justify-content: space-between !important;
-        align-items: center !important;
-        border: none !important;
-        padding: 8px 0 !important;
-        border-bottom: 1px dashed #eee !important;
-        text-align: left !important;
-        font-size: 0.9rem !important;
-    }
-    
-    .table-responsive table tbody td:last-child {
-        border-bottom: none !important;
-        justify-content: center !important;
-        padding-top: 12px !important;
-    }
-    
-    .table-responsive table tbody td::before {
-        content: attr(data-label);
-        font-weight: bold !important;
-        color: #495057 !important;
-        margin-right: 10px !important;
+
+    /* تحسين ظهور الأزرار في شاشة الهاتف */
+    .btn-sm {
+        padding: 0.4rem 0.6rem !important;
         font-size: 0.85rem !important;
     }
 
-    /* تحسين الأزرار في الجداول */
-    .btn-group, .d-flex {
-        flex-wrap: wrap !important;
-        gap: 5px !important;
+    /* منع التفاف النص في أعمدة الإجراءات */
+    td:last-child {
+        white-space: nowrap !important;
+        min-width: 120px;
     }
 
-    /* تحسين القائمة الجانبية والهيدر */
-    .navbar-brand {
-        font-size: 1rem !important;
+    /* تحسين عرض البطاقات */
+    .apple-card {
+        margin: 10px -15px !important;
+        border-radius: 0 !important;
+        border-left: none !important;
+        border-right: none !important;
+    }
+}
+
+/* تحسين عام لاستجابة الجداول */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Fix for Button Clicks on Mobile */
+.table-responsive {
+    position: relative;
+    z-index: 1;
+}
+
+.apple-table button, 
+.apple-table a {
+    position: relative;
+    z-index: 10 !important;
+    cursor: pointer !important;
+    touch-action: manipulation !important; /* تحسين استجابة اللمس */
+}
+
+/* تكبير مساحة النقر للأزرار الصغيرة على الهاتف */
+@media (max-width: 768px) {
+    .apple-table .btn-sm {
+        min-width: 35px;
+        min-height: 35px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 2px !important;
     }
     
-    .card-header .row > div {
-        margin-bottom: 10px !important;
-    }
-    
-    /* تحسين النوافذ المنبثقة (Modals) */
-    .modal-dialog {
-        margin: 10px !important;
-    }
-    
-    /* تحسين الإحصائيات (Stats Cards) */
-    .row.g-4 > div {
-        margin-bottom: 10px !important;
+    /* التأكد من أن التمرير الجانبي لا يغطي الأزرار */
+    .table-responsive {
+        padding-bottom: 10px;
+        margin-bottom: 10px;
     }
 }

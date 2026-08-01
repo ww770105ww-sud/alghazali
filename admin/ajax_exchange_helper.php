@@ -38,7 +38,7 @@ function get_account_balance_unified($pdo, $account_id)
 function get_account_currency_balance($pdo, $account_id, $currency_id)
 {
     $stmt = $pdo->prepare("
-        SELECT current_balance
+        SELECT COALESCE(SUM(current_balance), 0) AS current_balance
         FROM account_balances_unified
         WHERE account_id = ? AND currency_id = ?
     ");
@@ -329,27 +329,11 @@ if ($action === 'update_exchange') {
             throw new Exception('العملية غير موجودة.');
         }
 
-        // 1. عكس الأرصدة المتعلقة بالقيد السابق
-        $stmt_lines = $pdo->prepare("
-            SELECT jl.account_id, jl.debit, jl.credit, jl.currency_id, ua.normal_balance
-            FROM journal_lines jl
-            JOIN unified_accounts ua ON jl.account_id = ua.id
-            WHERE jl.financial_transaction_id IN (SELECT id FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?)
-        ");
-        $stmt_lines->execute([$id]);
-        $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($lines as $line) {
-            $amount_to_reverse = ($line['debit'] > 0) ? -$line['debit'] : $line['credit'];
-            $pdo->prepare("UPDATE account_balances_unified SET current_balance = current_balance + ? WHERE account_id = ? AND currency_id = ?")
-                ->execute([$amount_to_reverse, $line['account_id'], $line['currency_id']]);
-        }
-
-        // 2. حذف القيود السابقة
+        // 1. حذف القيود السابقة؛ الـ triggers ستعكس الأرصدة تلقائياً.
         $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id IN (SELECT id FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?)")->execute([$id]);
         $pdo->prepare("DELETE FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?")->execute([$id]);
 
-        // 3. تحديث بيانات عملية الصرف
+        // 2. تحديث بيانات عملية الصرف
         $stmt = $pdo->prepare("
             UPDATE currency_exchange_transactions SET
                 transaction_date = ?,
@@ -393,33 +377,13 @@ if ($action === 'delete_exchange') {
     try {
         $pdo->beginTransaction();
 
-        // 1. عكس الأرصدة المتعلقة بالقيد السابق
-        $stmt_lines = $pdo->prepare("
-            SELECT jl.account_id, jl.debit, jl.credit, jl.currency_id, ua.normal_balance
-            FROM journal_lines jl
-            JOIN unified_accounts ua ON jl.account_id = ua.id
-            WHERE jl.financial_transaction_id IN (SELECT id FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?)
-        ");
-        $stmt_lines->execute([$id]);
-        $lines = $stmt_lines->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($lines as $line) {
-            // عكس الأرصدة: إذا كان القيد مدينًا، نطرحه، وإذا كان دائنًا، نضيفه
-            // باستخدام sp_update_account_balances: balance += (debit - credit)
-            // العكس: balance -= (debit - credit) => balance += (credit - debit)
-            $amount_to_reverse = ($line['debit'] > 0) ? -$line['debit'] : $line['credit'];
-
-            $pdo->prepare("UPDATE account_balances_unified SET current_balance = current_balance + ? WHERE account_id = ? AND currency_id = ?")
-                ->execute([$amount_to_reverse, $line['account_id'], $line['currency_id']]);
-        }
-
-        // 2. حذف جميع القيود المحاسبية
+        // 1. حذف جميع القيود المحاسبية؛ الـ triggers ستعكس الأرصدة تلقائياً.
         $pdo->prepare("DELETE FROM journal_lines WHERE financial_transaction_id IN (SELECT id FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?)")->execute([$id]);
 
-        // 3. حذف المعاملات المالية
+        // 2. حذف المعاملات المالية
         $pdo->prepare("DELETE FROM financial_transactions WHERE reference_type = 'exchange' AND reference_id = ?")->execute([$id]);
 
-        // 4. حذف عملية الصرف نفسها
+        // 3. حذف عملية الصرف نفسها
         $pdo->prepare("DELETE FROM currency_exchange_transactions WHERE id = ?")->execute([$id]);
 
         $pdo->commit();

@@ -4,6 +4,6 @@
  * وكالة الغزالي للسفريات والسياحة
  */
 
-header("Location: admin/currency_exchange_tool.php");
+header("Location: admin/currency_exchange.php");
 exit;
 ?>

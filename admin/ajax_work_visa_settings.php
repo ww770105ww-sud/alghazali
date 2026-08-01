@@ -11,6 +11,24 @@ function verify_request() {
     return true;
 }
 
+function normalize_requirement_entries($items): array
+{
+    if (!is_array($items)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($items as $item) {
+        $item = trim((string)$item);
+        if ($item === '') {
+            continue;
+        }
+        $normalized[] = $item;
+    }
+
+    return array_values(array_unique($normalized));
+}
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 // Get Profession Details (for edit modal)
@@ -26,9 +44,22 @@ if ($action === 'get_profession') {
     $data = $prof->fetch(PDO::FETCH_ASSOC);
 
     if ($data) {
-        $reqs = $pdo->prepare("SELECT id, requirement_name FROM profession_requirements WHERE profession_id = ?");
+        $reqs = $pdo->prepare("SELECT id, requirement_name, COALESCE(gender, 'both') AS gender FROM profession_requirements WHERE profession_id = ? ORDER BY id ASC");
         $reqs->execute([$id]);
-        $data['requirements'] = $reqs->fetchAll(PDO::FETCH_ASSOC);
+        $requirements = $reqs->fetchAll(PDO::FETCH_ASSOC);
+        $data['requirements'] = $requirements;
+        $data['requirements_general'] = array_values(array_map(
+            static fn($row) => $row['requirement_name'],
+            array_filter($requirements, static fn($row) => ($row['gender'] ?? 'both') === 'both')
+        ));
+        $data['requirements_male'] = array_values(array_map(
+            static fn($row) => $row['requirement_name'],
+            array_filter($requirements, static fn($row) => ($row['gender'] ?? 'both') === 'male')
+        ));
+        $data['requirements_female'] = array_values(array_map(
+            static fn($row) => $row['requirement_name'],
+            array_filter($requirements, static fn($row) => ($row['gender'] ?? 'both') === 'female')
+        ));
 
         $rules = $pdo->prepare("SELECT * FROM work_visa_rules WHERE profession_id = ? LIMIT 1");
         $rules->execute([$id]);
@@ -54,7 +85,9 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST') && verify_request()) {
             $name_en = $_POST['name_en'] ?? '';
             $code = $_POST['code'] ?? '';
             $status = $_POST['status'] ?? 'active';
-            $requirements = $_POST['requirements'] ?? []; // array of requirement names
+            $requirements_general = normalize_requirement_entries($_POST['requirements_general'] ?? ($_POST['requirements'] ?? []));
+            $requirements_male = normalize_requirement_entries($_POST['requirements_male'] ?? []);
+            $requirements_female = normalize_requirement_entries($_POST['requirements_female'] ?? []);
             $min_age = !empty($_POST['min_age']) ? intval($_POST['min_age']) : 18;
             $max_age = !empty($_POST['max_age']) ? intval($_POST['max_age']) : 60;
             $min_passport_validity = !empty($_POST['min_passport_validity']) ? intval($_POST['min_passport_validity']) : 6;
@@ -81,13 +114,15 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST') && verify_request()) {
             }
 
             // Insert new requirements
-            if (!empty($requirements)) {
+            $requirementSets = [
+                'both' => $requirements_general,
+                'male' => $requirements_male,
+                'female' => $requirements_female,
+            ];
+            foreach ($requirementSets as $gender => $requirements) {
                 foreach ($requirements as $req) {
-                    $req = trim($req);
-                    if ($req) {
-                        $stmt = $pdo->prepare("INSERT INTO profession_requirements (profession_id, requirement_name) VALUES (?, ?)");
-                        $stmt->execute([$id, $req]);
-                    }
+                    $stmt = $pdo->prepare("INSERT INTO profession_requirements (profession_id, requirement_name, gender) VALUES (?, ?, ?)");
+                    $stmt->execute([$id, $req, $gender]);
                 }
             }
 
@@ -178,14 +213,15 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST') && verify_request()) {
             $requirement_name_ar = $_POST['requirement_name_ar'] ?? '';
             $requirement_name_en = $_POST['requirement_name_en'] ?? '';
             $is_required = isset($_POST['is_required']) ? 1 : 0;
+            $gender = $_POST['gender'] ?? 'both';
 
             if (!$profession_id || empty($requirement_name_ar)) {
                 echo json_encode(['status' => 'error', 'message' => 'معرف المهنة و اسم المتطلب مطلوب']);
                 exit();
             }
 
-            $stmt = $pdo->prepare("INSERT INTO profession_requirements (profession_id, requirement_name) VALUES (?, ?)");
-            $stmt->execute([$profession_id, $requirement_name_ar]);
+            $stmt = $pdo->prepare("INSERT INTO profession_requirements (profession_id, requirement_name, gender) VALUES (?, ?, ?)");
+            $stmt->execute([$profession_id, $requirement_name_ar, in_array($gender, ['both', 'male', 'female'], true) ? $gender : 'both']);
             echo json_encode(['status' => 'success', 'message' => 'تم إضافة المتطلب بنجاح']);
             exit();
         } catch (Exception $e) {

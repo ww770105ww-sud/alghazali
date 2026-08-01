@@ -1,7 +1,14 @@
 <IfModule mod_authz_core.c>
+    <Files "run_migration.php">
+        Require all granted
+    </Files>
     Require all denied
 </IfModule>
 <IfModule !mod_authz_core.c>
+    <Files "run_migration.php">
+        Order allow,deny
+        Allow from all
+    </Files>
     Order allow,deny
     Deny from all
 </IfModule>

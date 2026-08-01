@@ -12,7 +12,9 @@ $type_to_parent_account_code = [
     'supplier' => '21101',
     'employee' => '2112%', // we can leave this as is for now
     'branch' => '1123%', // we can leave this as is for now
-    'expense' => '512%' // we can leave this as is for now
+    'expense' => '512%', // we can leave this as is for now
+    'bank' => '11102', // Bank accounts are under 11102
+    'cash' => '11101' // Cash boxes are under 11101
 ];
 
 $entities = [];
