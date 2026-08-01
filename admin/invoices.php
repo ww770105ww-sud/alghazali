@@ -114,203 +114,12 @@ if (isset($_GET['posted']) && $_GET['posted'] === '1' && empty($_GET['status']))
 }
 
 // فلترة الفواتير (نقلها للأعلى ليتم استخدامها في الاستعلام الرئيسي قبل Header)
-/*
-$where = "WHERE 1=1";
-$params = [];
-
-if (!empty($_GET['from_date'])) {
-    $where .= " AND i.invoice_date >= ?";
-    $params[] = $_GET['from_date'] . ' 00:00:00';
-}
-if (!empty($_GET['to_date'])) {
-    $where .= " AND i.invoice_date <= ?";
-    $params[] = $_GET['to_date'] . ' 23:59:59';
-}
-if (!empty($_GET['invoice_category'])) {
-    $where .= " AND i.invoice_category = ?";
-    $params[] = $_GET['invoice_category'];
-}
-if (!empty($_GET['branch_id'])) {
-    $where .= " AND i.branch_id = ?";
-    $params[] = $_GET['branch_id'];
-}
-if (!empty($_GET['currency_filter'])) {
-    $where .= " AND i.currency_id = ?";
-    $params[] = $_GET['currency_filter'];
-}
-if (!empty($_GET['status'])) {
-    $where .= " AND i.invoice_status = ?";
-    $params[] = $_GET['status'];
-}
-if (!empty($_GET['q'])) {
-    $search = "%" . $_GET['q'] . "%";
-    $where .= " AND (invoice_number LIKE ? OR description LIKE ?)";
-    $params[] = $search;
-    $params[] = $search;
-}
-*/
 
 // جلب إعدادات الترقيم العامة للاستعلام
 $def_s_pref = $settings['sales_invoice_prefix'] ?? 'SAL-';
 $def_p_pref = $settings['purchase_invoice_prefix'] ?? 'PUR-';
 
 // تجهيز الاستعلام الرئيسي لدمج الفواتير بطريقة ذكية
-/*
-$query = "SELECT
-            -- بيانات فاتورة البيع
-            CASE WHEN i.invoice_category = 'sales' THEN i.id ELSE NULL END as sales_id,
-            CASE WHEN i.invoice_category = 'sales' THEN i.invoice_number ELSE NULL END as sales_number,
-            CASE WHEN i.invoice_category = 'sales' THEN i.total_amount ELSE 0 END as sales_amount,
-            CASE WHEN i.invoice_category = 'sales' THEN i.discount ELSE 0 END as sales_discount,
-            CASE WHEN i.invoice_category = 'sales' THEN i.invoice_status ELSE NULL END as sales_status,
-            -- حساب المبلغ المستلم (الابتدائي من القيد + أي تحصيلات لاحقة)
-            CASE WHEN i.invoice_category = 'sales' THEN (
-                IFNULL((
-                    SELECT SUM(jl.debit)
-                    FROM journal_lines jl
-                    JOIN financial_transactions ft_i ON jl.financial_transaction_id = ft_i.id
-                    WHERE ft_i.reference_id = i.id AND ft_i.reference_type = 'invoice' AND ft_i.status = 'posted'
-                    AND jl.account_id IN (
-                        SELECT id FROM unified_accounts
-                        WHERE account_code  LIKE '101%' OR account_code  LIKE '102%' OR account_code  LIKE '111%' OR account_type IN ('box', 'bank')
-                    )
-                ), 0) +
-                IFNULL((
-                    SELECT SUM(pa.allocated_amount)
-                    FROM payment_allocations pa
-                    JOIN financial_transactions ft ON pa.financial_transaction_id = ft.id
-                    WHERE pa.invoice_id = i.id AND ft.status = 'posted'
-                    AND ft.id NOT IN (
-                        SELECT id FROM financial_transactions
-                        WHERE reference_id = i.id AND reference_type = 'invoice'
-                    )
-                ), 0)
-            ) ELSE 0 END as sales_received,
-            CASE WHEN i.invoice_category = 'sales' THEN i.account_id ELSE NULL END as sales_account_id,
-            CASE WHEN i.invoice_category = 'sales' THEN i.delivery_type ELSE NULL END as sales_delivery_type,
-
-            -- حقول الهوية للأطراف (مهمة لدالة getPartyName)
-            i.account_id,
-            i.customer_id,
-            i.agent_id,
-
-            -- بيانات فاتورة الشراء (سواء كانت مدمجة أو مستقلة)
-            CASE WHEN i.invoice_category = 'purchase' THEN i.id ELSE pur.id END as purchase_id,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.invoice_number ELSE pur.invoice_number END as purchase_number,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.total_amount ELSE pur.total_amount END as purchase_amount,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.invoice_status ELSE pur.invoice_status END as purchase_status,
-            -- حساب المبلغ المسدد للمورد (الابتدائي من القيد + أي مدفوعات لاحقة)
-            CASE
-                WHEN i.invoice_category = 'purchase' THEN (
-                    IFNULL((
-                        SELECT SUM(jl_p.credit)
-                        FROM journal_lines jl_p
-                        JOIN financial_transactions ft_ip ON jl_p.financial_transaction_id = ft_ip.id
-                        WHERE ft_ip.reference_id = i.id AND ft_ip.reference_type = 'invoice' AND ft_ip.status = 'posted'
-                        AND jl_p.account_id IN (
-                            SELECT id FROM unified_accounts
-                            WHERE account_type IN ('box', 'bank')
-                        )
-                    ), 0) +
-                    IFNULL((
-                        SELECT SUM(pa_p.allocated_amount)
-                        FROM payment_allocations pa_p
-                        JOIN financial_transactions ft_p ON pa_p.financial_transaction_id = ft_p.id
-                        WHERE pa_p.invoice_id = i.id AND ft_p.status = 'posted'
-                        AND ft_p.id NOT IN (
-                            SELECT id FROM financial_transactions
-                            WHERE reference_id = i.id AND reference_type = 'invoice'
-                        )
-                    ), 0)
-                )
-                WHEN pur.id IS NOT NULL THEN (
-                    IFNULL((
-                        SELECT SUM(jl_p2.credit)
-                        FROM journal_lines jl_p2
-                        JOIN financial_transactions ft_ip2 ON jl_p2.financial_transaction_id = ft_ip2.id
-                        WHERE ft_ip2.reference_id = pur.id AND ft_ip2.reference_type = 'invoice' AND ft_ip2.status = 'posted'
-                        AND jl_p2.account_id IN (
-                            SELECT id FROM unified_accounts
-                            WHERE account_type IN ('box', 'bank')
-                        )
-                    ), 0) +
-                    IFNULL((
-                        SELECT SUM(pa_p.allocated_amount)
-                        FROM payment_allocations pa_p
-                        JOIN financial_transactions ft_p ON pa_p.financial_transaction_id = ft_p.id
-                        WHERE pa_p.invoice_id = pur.id AND ft_p.status = 'posted'
-                        AND ft_p.id NOT IN (
-                            SELECT id FROM financial_transactions
-                            WHERE reference_id = pur.id AND reference_type = 'invoice'
-                        )
-                    ), 0)
-                )
-                ELSE 0
-            END as purchase_received,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.supplier_id ELSE COALESCE(pur.supplier_id, i.supplier_id) END as supplier_id,
-
-            -- بيانات عامة
-            i.invoice_date,
-            i.invoice_category,
-            i.source_type,
-            i.source_id,
-            i.description,
-            i.amount_received as sales_amount_received,
-            i.cost_amount as sales_cost_field,
-            i.currency_id,
-            pur.currency_id as purchase_currency_id,
-            i.supplier_id as direct_supplier_id,
-            b.branch_name,
-            c.currency_symbol,
-            c.exchange_rate_buy as sales_rate,
-            cpur.exchange_rate_buy as pur_rate,
-
-            -- الربح والخسارة المحتسب (بناءً على تحويل التكلفة لعملة البيع)
-            (CASE WHEN i.invoice_category = 'sales' THEN (i.total_amount - i.discount) ELSE 0 END -
-             COALESCE(
-                CASE WHEN i.invoice_category = 'purchase' THEN
-                    (i.total_amount * IFNULL(cpur.exchange_rate_buy, 1) / IFNULL(c.exchange_rate_buy, 1))
-                ELSE
-                    (pur.total_amount * IFNULL(cpur.exchange_rate_buy, 1) / IFNULL(c.exchange_rate_buy, 1))
-                END,
-                i.cost_amount, 0)
-            ) as profit_loss
-
-          FROM invoices i
-          LEFT JOIN branches b ON i.branch_id = b.id
-          LEFT JOIN currencies c ON i.currency_id = c.id
-
-          -- ربط فاتورة الشراء المقابلة بطريقة ذكية
-          LEFT JOIN invoices pur ON (
-              (pur.source_type = i.source_type AND pur.source_id = i.source_id AND pur.source_id != 0 AND pur.source_id IS NOT NULL AND pur.invoice_category = 'purchase' AND i.invoice_category = 'sales')
-              OR
-              (
-                i.invoice_category = 'sales' AND pur.invoice_category = 'purchase'
-                AND i.source_type = pur.source_type
-                AND SUBSTRING_INDEX(i.invoice_number, '-', -1) = SUBSTRING_INDEX(pur.invoice_number, '-', -1)
-                AND i.source_id = 0 AND pur.source_id = 0
-              )
-          )
-          LEFT JOIN currencies cpur ON (CASE WHEN i.invoice_category = 'purchase' THEN i.currency_id ELSE pur.currency_id END) = cpur.id
-
-          $where AND (
-              -- 1. فواتير البيع (تظهر دائماً، وإذا ارتبطت بشراء تدمج في نفس الصف)
-              i.invoice_category = 'sales'
-              OR
-              -- 2. فواتير الشراء المستقلة (التي ليس لها فاتورة بيع مرتبطة)
-              (i.invoice_category = 'purchase' AND NOT EXISTS (
-                  SELECT 1 FROM invoices s
-                  WHERE s.invoice_category = 'sales'
-                  AND s.source_type = i.source_type
-                  AND (
-                      (s.source_id = i.source_id AND i.source_id != 0 AND i.source_id IS NOT NULL)
-                      OR
-                      (i.source_id = 0 AND s.source_id = 0 AND SUBSTRING_INDEX(s.invoice_number, '-', -1) = SUBSTRING_INDEX(i.invoice_number, '-', -1))
-                  )
-              ))
-          )
-          ORDER BY i.invoice_date DESC, i.id DESC";
-*/
 
 // جلب بيانات الموردين مع أكواد حساباتهم مسبقاً بشكل هرمي
 // جلب معرف الأب للموردين (21101)
@@ -1724,11 +1533,11 @@ $params = [];
 
 if (!empty($_GET['from_date'])) {
     $where .= " AND i.invoice_date >= ?";
-    $params[] = $_GET['from_date'] . ' 00:00:00';
+    $params[] = normalize_date_filter_start($_GET['from_date']);
 }
 if (!empty($_GET['to_date'])) {
     $where .= " AND i.invoice_date <= ?";
-    $params[] = $_GET['to_date'] . ' 23:59:59';
+    $params[] = normalize_date_filter_end($_GET['to_date']);
 }
 if (!empty($_GET['invoice_category'])) {
     $where .= " AND i.invoice_category = ?";
@@ -2987,7 +2796,7 @@ $pager_end = min($total_pages, $page + 2);
     <?php endif; ?>
 </div>
 
-<div class="modal fade" id="editInvoiceModal" tabindex="-1">
+<!-- مودال تعديل الفاتورة -->
 <div class="modal fade" id="editInvoiceModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4">
