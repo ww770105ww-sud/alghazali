@@ -109,203 +109,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_account_from_entity' && i
     exit;
 }
 
-// فلترة الفواتير (نقلها للأعلى ليتم استخدامها في الاستعلام الرئيسي قبل Header)
-$where = "WHERE 1=1";
-$params = [];
-
-if (!empty($_GET['from_date'])) {
-    $where .= " AND invoice_date >= ?";
-    $params[] = normalize_date_filter_start($_GET['from_date']);
-}
-if (!empty($_GET['to_date'])) {
-    $where .= " AND invoice_date <= ?";
-    $params[] = normalize_date_filter_end($_GET['to_date']);
-}
-if (!empty($_GET['invoice_category'])) {
-    $where .= " AND invoice_category = ?";
-    $params[] = $_GET['invoice_category'];
-}
 if (isset($_GET['posted']) && $_GET['posted'] === '1' && empty($_GET['status'])) {
     $_GET['status'] = 'posted';
 }
-if (!empty($_GET['branch_id'])) {
-    $where .= " AND branch_id = ?";
-    $params[] = $_GET['branch_id'];
-}
-if (!empty($_GET['currency_filter'])) {
-    $where .= " AND currency_id = ?";
-    $params[] = $_GET['currency_filter'];
-}
-if (!empty($_GET['status'])) {
-    $where .= " AND i.invoice_status = ?";
-    $params[] = $_GET['status'];
-}
-if (!empty($_GET['q'])) {
-    $search = "%" . $_GET['q'] . "%";
-    $where .= " AND (invoice_number LIKE ? OR description LIKE ?)";
-    $params[] = $search;
-    $params[] = $search;
-}
+
+// فلترة الفواتير (نقلها للأعلى ليتم استخدامها في الاستعلام الرئيسي قبل Header)
 
 // جلب إعدادات الترقيم العامة للاستعلام
 $def_s_pref = $settings['sales_invoice_prefix'] ?? 'SAL-';
 $def_p_pref = $settings['purchase_invoice_prefix'] ?? 'PUR-';
 
 // تجهيز الاستعلام الرئيسي لدمج الفواتير بطريقة ذكية
-$query = "SELECT
-            -- بيانات فاتورة البيع
-            CASE WHEN i.invoice_category = 'sales' THEN i.id ELSE NULL END as sales_id,
-            CASE WHEN i.invoice_category = 'sales' THEN i.invoice_number ELSE NULL END as sales_number,
-            CASE WHEN i.invoice_category = 'sales' THEN i.total_amount ELSE 0 END as sales_amount,
-            CASE WHEN i.invoice_category = 'sales' THEN i.discount ELSE 0 END as sales_discount,
-            CASE WHEN i.invoice_category = 'sales' THEN i.invoice_status ELSE NULL END as sales_status,
-            -- حساب المبلغ المستلم (الابتدائي من القيد + أي تحصيلات لاحقة)
-            CASE WHEN i.invoice_category = 'sales' THEN (
-                IFNULL((
-                    SELECT SUM(jl.debit)
-                    FROM journal_lines jl
-                    JOIN financial_transactions ft_i ON jl.financial_transaction_id = ft_i.id
-                    WHERE ft_i.reference_id = i.id AND ft_i.reference_type = 'invoice' AND ft_i.status = 'posted'
-                    AND jl.account_id IN (
-                        SELECT id FROM unified_accounts
-                        WHERE account_code  LIKE '101%' OR account_code  LIKE '102%' OR account_code  LIKE '111%' OR account_type IN ('box', 'bank')
-                    )
-                ), 0) +
-                IFNULL((
-                    SELECT SUM(pa.allocated_amount)
-                    FROM payment_allocations pa
-                    JOIN financial_transactions ft ON pa.financial_transaction_id = ft.id
-                    WHERE pa.invoice_id = i.id AND ft.status = 'posted'
-                    AND ft.id NOT IN (
-                        SELECT id FROM financial_transactions
-                        WHERE reference_id = i.id AND reference_type = 'invoice'
-                    )
-                ), 0)
-            ) ELSE 0 END as sales_received,
-            CASE WHEN i.invoice_category = 'sales' THEN i.account_id ELSE NULL END as sales_account_id,
-            CASE WHEN i.invoice_category = 'sales' THEN i.delivery_type ELSE NULL END as sales_delivery_type,
-
-            -- حقول الهوية للأطراف (مهمة لدالة getPartyName)
-            i.account_id,
-            i.customer_id,
-            i.agent_id,
-
-            -- بيانات فاتورة الشراء (سواء كانت مدمجة أو مستقلة)
-            CASE WHEN i.invoice_category = 'purchase' THEN i.id ELSE pur.id END as purchase_id,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.invoice_number ELSE pur.invoice_number END as purchase_number,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.total_amount ELSE pur.total_amount END as purchase_amount,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.invoice_status ELSE pur.invoice_status END as purchase_status,
-            -- حساب المبلغ المسدد للمورد (الابتدائي من القيد + أي مدفوعات لاحقة)
-            CASE
-                WHEN i.invoice_category = 'purchase' THEN (
-                    IFNULL((
-                        SELECT SUM(jl_p.credit)
-                        FROM journal_lines jl_p
-                        JOIN financial_transactions ft_ip ON jl_p.financial_transaction_id = ft_ip.id
-                        WHERE ft_ip.reference_id = i.id AND ft_ip.reference_type = 'invoice' AND ft_ip.status = 'posted'
-                        AND jl_p.account_id IN (
-                            SELECT id FROM unified_accounts
-                            WHERE account_type IN ('box', 'bank')
-                        )
-                    ), 0) +
-                    IFNULL((
-                        SELECT SUM(pa_p.allocated_amount)
-                        FROM payment_allocations pa_p
-                        JOIN financial_transactions ft_p ON pa_p.financial_transaction_id = ft_p.id
-                        WHERE pa_p.invoice_id = i.id AND ft_p.status = 'posted'
-                        AND ft_p.id NOT IN (
-                            SELECT id FROM financial_transactions
-                            WHERE reference_id = i.id AND reference_type = 'invoice'
-                        )
-                    ), 0)
-                )
-                WHEN pur.id IS NOT NULL THEN (
-                    IFNULL((
-                        SELECT SUM(jl_p2.credit)
-                        FROM journal_lines jl_p2
-                        JOIN financial_transactions ft_ip2 ON jl_p2.financial_transaction_id = ft_ip2.id
-                        WHERE ft_ip2.reference_id = pur.id AND ft_ip2.reference_type = 'invoice' AND ft_ip2.status = 'posted'
-                        AND jl_p2.account_id IN (
-                            SELECT id FROM unified_accounts
-                            WHERE account_type IN ('box', 'bank')
-                        )
-                    ), 0) +
-                    IFNULL((
-                        SELECT SUM(pa_p.allocated_amount)
-                        FROM payment_allocations pa_p
-                        JOIN financial_transactions ft_p ON pa_p.financial_transaction_id = ft_p.id
-                        WHERE pa_p.invoice_id = pur.id AND ft_p.status = 'posted'
-                        AND ft_p.id NOT IN (
-                            SELECT id FROM financial_transactions
-                            WHERE reference_id = pur.id AND reference_type = 'invoice'
-                        )
-                    ), 0)
-                )
-                ELSE 0
-            END as purchase_received,
-            CASE WHEN i.invoice_category = 'purchase' THEN i.supplier_id ELSE COALESCE(pur.supplier_id, i.supplier_id) END as supplier_id,
-
-            -- بيانات عامة
-            i.invoice_date,
-            i.invoice_category,
-            i.source_type,
-            i.source_id,
-            i.description,
-            i.amount_received as sales_amount_received,
-            i.cost_amount as sales_cost_field,
-            i.currency_id,
-            pur.currency_id as purchase_currency_id,
-            i.supplier_id as direct_supplier_id,
-            b.branch_name,
-            c.currency_symbol,
-            c.exchange_rate_buy as sales_rate,
-            cpur.exchange_rate_buy as pur_rate,
-
-            -- الربح والخسارة المحتسب (بناءً على تحويل التكلفة لعملة البيع)
-            (CASE WHEN i.invoice_category = 'sales' THEN (i.total_amount - i.discount) ELSE 0 END -
-             COALESCE(
-                CASE WHEN i.invoice_category = 'purchase' THEN
-                    (i.total_amount * IFNULL(cpur.exchange_rate_buy, 1) / IFNULL(c.exchange_rate_buy, 1))
-                ELSE
-                    (pur.total_amount * IFNULL(cpur.exchange_rate_buy, 1) / IFNULL(c.exchange_rate_buy, 1))
-                END,
-                i.cost_amount, 0)
-            ) as profit_loss
-
-          FROM invoices i
-          LEFT JOIN branches b ON i.branch_id = b.id
-          LEFT JOIN currencies c ON i.currency_id = c.id
-
-          -- ربط فاتورة الشراء المقابلة بطريقة ذكية
-          LEFT JOIN invoices pur ON (
-              (pur.source_type = i.source_type AND pur.source_id = i.source_id AND pur.source_id != 0 AND pur.source_id IS NOT NULL AND pur.invoice_category = 'purchase' AND i.invoice_category = 'sales')
-              OR
-              (
-                i.invoice_category = 'sales' AND pur.invoice_category = 'purchase'
-                AND i.source_type = pur.source_type
-                AND SUBSTRING_INDEX(i.invoice_number, '-', -1) = SUBSTRING_INDEX(pur.invoice_number, '-', -1)
-                AND i.source_id = 0 AND pur.source_id = 0
-              )
-          )
-          LEFT JOIN currencies cpur ON (CASE WHEN i.invoice_category = 'purchase' THEN i.currency_id ELSE pur.currency_id END) = cpur.id
-
-          $where AND (
-              -- 1. فواتير البيع (تظهر دائماً، وإذا ارتبطت بشراء تدمج في نفس الصف)
-              i.invoice_category = 'sales'
-              OR
-              -- 2. فواتير الشراء المستقلة (التي ليس لها فاتورة بيع مرتبطة)
-              (i.invoice_category = 'purchase' AND NOT EXISTS (
-                  SELECT 1 FROM invoices s
-                  WHERE s.invoice_category = 'sales'
-                  AND s.source_type = i.source_type
-                  AND (
-                      (s.source_id = i.source_id AND i.source_id != 0 AND i.source_id IS NOT NULL)
-                      OR
-                      (i.source_id = 0 AND s.source_id = 0 AND SUBSTRING_INDEX(s.invoice_number, '-', -1) = SUBSTRING_INDEX(i.invoice_number, '-', -1))
-                  )
-              ))
-          )
-          ORDER BY i.invoice_date DESC, i.id DESC";
 
 // جلب بيانات الموردين مع أكواد حساباتهم مسبقاً بشكل هرمي
 // جلب معرف الأب للموردين (21101)
@@ -437,21 +251,15 @@ foreach ($services as $s) {
     ];
 }
 
-try {
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
-    $invoices = $stmt->fetchAll();
-} catch (PDOException $e) {
-    if (strpos($e->getMessage(), 'invoices') !== false) {
-        $invoices = [];
-    } else {
-        throw $e;
-    }
-}
-
 // دالة لجلب اسم الطرف
-function getPartyName($pdo, $inv)
+function getPartyName($pdo, $inv, $party_name_maps = null)
 {
+    $party_name_maps = $party_name_maps ?: [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
     $category = $inv['invoice_category'] ?? null;
     $supplier_id = $inv['supplier_id'] ?? null;
     $account_id = $inv['account_id'] ?? null;
@@ -460,16 +268,22 @@ function getPartyName($pdo, $inv)
 
     // للأمان: إذا كان هناك عميل أو وكيل محدد، نعرض اسمه أولاً
     if (!empty($customer_id)) {
-        $stmt = $pdo->prepare("SELECT full_name as name FROM customers WHERE id = ?");
-        $stmt->execute([$customer_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['customers'][(int)$customer_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT full_name as name FROM customers WHERE id = ?");
+            $stmt->execute([$customer_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "عميل: " . $name;
         }
     } elseif (!empty($agent_id)) {
-        $stmt = $pdo->prepare("SELECT agent_name as name FROM agents WHERE id = ?");
-        $stmt->execute([$agent_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['agents'][(int)$agent_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT agent_name as name FROM agents WHERE id = ?");
+            $stmt->execute([$agent_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "وكيل: " . $name;
         }
@@ -477,9 +291,12 @@ function getPartyName($pdo, $inv)
 
     // إذا لم يوجد عميل/وكيل، نتحقق من نوع الفاتورة
     if ($category == 'purchase' && !empty($supplier_id)) {
-        $stmt = $pdo->prepare("SELECT supplier_name as name FROM suppliers WHERE id = ?");
-        $stmt->execute([$supplier_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['suppliers'][(int)$supplier_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT supplier_name as name FROM suppliers WHERE id = ?");
+            $stmt->execute([$supplier_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return "مورد: " . $name;
         }
@@ -487,15 +304,68 @@ function getPartyName($pdo, $inv)
 
     // إذا لم يوجد أي من الأطراف القديمة، نحاول جلب من unified_accounts باستخدام account_id
     if (!empty($account_id)) {
-        $stmt = $pdo->prepare("SELECT account_name_ar as name FROM unified_accounts WHERE id = ?");
-        $stmt->execute([$account_id]);
-        $name = $stmt->fetchColumn();
+        $name = $party_name_maps['accounts'][(int)$account_id] ?? null;
+        if ($name === null) {
+            $stmt = $pdo->prepare("SELECT account_name_ar as name FROM unified_accounts WHERE id = ?");
+            $stmt->execute([$account_id]);
+            $name = $stmt->fetchColumn();
+        }
         if ($name) {
             return $name;
         }
     }
 
     return "فاتورة عامة";
+}
+
+function getPartyNameMaps($pdo, $invoices)
+{
+    $ids = [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
+
+    foreach ($invoices as $invoice) {
+        foreach ([
+            'customers' => $invoice['customer_id'] ?? null,
+            'agents' => $invoice['agent_id'] ?? null,
+            'suppliers' => $invoice['supplier_id'] ?? null,
+            'accounts' => $invoice['account_id'] ?? null,
+        ] as $type => $id) {
+            if ($id !== null && $id !== '') {
+                $ids[$type][(int)$id] = true;
+            }
+        }
+    }
+
+    $maps = [
+        'customers' => [],
+        'agents' => [],
+        'suppliers' => [],
+        'accounts' => [],
+    ];
+    $queries = [
+        'customers' => 'SELECT id, full_name AS name FROM customers WHERE id IN (%s)',
+        'agents' => 'SELECT id, agent_name AS name FROM agents WHERE id IN (%s)',
+        'suppliers' => 'SELECT id, supplier_name AS name FROM suppliers WHERE id IN (%s)',
+        'accounts' => 'SELECT id, account_name_ar AS name FROM unified_accounts WHERE id IN (%s)',
+    ];
+
+    foreach ($queries as $type => $sql) {
+        if (empty($ids[$type])) {
+            continue;
+        }
+        $placeholders = implode(', ', array_fill(0, count($ids[$type]), '?'));
+        $stmt = $pdo->prepare(sprintf($sql, $placeholders));
+        $stmt->execute(array_keys($ids[$type]));
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $maps[$type][(int)$row['id']] = $row['name'];
+        }
+    }
+
+    return $maps;
 }
 
 function resolveInvoicePartyAccounts($pdo, $delivery_type, $account_id, $customer_id = null, $agent_id = null, $supplier_id = null)
@@ -1662,23 +1532,29 @@ $where = "WHERE 1=1";
 $params = [];
 
 if (!empty($_GET['from_date'])) {
-    $where .= " AND invoice_date >= ?";
-    $params[] = normalize_date_filter_start($_GET['from_date']);
+    $from_date = normalize_date_filter_start($_GET['from_date']);
+    if ($from_date !== null) {
+        $where .= " AND i.invoice_date >= ?";
+        $params[] = $from_date;
+    }
 }
 if (!empty($_GET['to_date'])) {
-    $where .= " AND invoice_date <= ?";
-    $params[] = normalize_date_filter_end($_GET['to_date']);
+    $to_date = normalize_date_filter_end($_GET['to_date']);
+    if ($to_date !== null) {
+        $where .= " AND i.invoice_date <= ?";
+        $params[] = $to_date;
+    }
 }
 if (!empty($_GET['invoice_category'])) {
-    $where .= " AND invoice_category = ?";
+    $where .= " AND i.invoice_category = ?";
     $params[] = $_GET['invoice_category'];
 }
 if (!empty($_GET['branch_id'])) {
-    $where .= " AND branch_id = ?";
+    $where .= " AND i.branch_id = ?";
     $params[] = $_GET['branch_id'];
 }
 if (!empty($_GET['currency_filter'])) {
-    $where .= " AND currency_id = ?";
+    $where .= " AND i.currency_id = ?";
     $params[] = $_GET['currency_filter'];
 }
 if (!empty($_GET['status'])) {
@@ -1892,9 +1768,36 @@ if ($exchange_loss_id) {
 
 $services = $pdo->query("SELECT id, service_name FROM services WHERE status = 'active' ORDER BY service_name ASC")->fetchAll();
 
+$allowed_per_page = [5, 25, 50, 100, 200];
+$per_page = (int)($_GET['per_page'] ?? 50);
+if (!in_array($per_page, $allowed_per_page, true)) {
+    $per_page = 50;
+}
+$page = max(1, (int)($_GET['page'] ?? 1));
+$total_invoices = 0;
+$total_pages = 1;
+
 try {
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
+    $count_query = preg_replace(
+        '/\s+ORDER BY i\.invoice_date DESC, i\.id DESC;?\s*$/',
+        '',
+        $query
+    );
+    $count_stmt = $pdo->prepare("SELECT COUNT(*) FROM ({$count_query}) AS invoice_rows");
+    $count_stmt->execute($params);
+    $total_invoices = (int)$count_stmt->fetchColumn();
+    $total_pages = max(1, (int)ceil($total_invoices / $per_page));
+    $page = min($page, $total_pages);
+    $offset = ($page - 1) * $per_page;
+
+    $paged_query = rtrim($query, " ;\r\n") . " LIMIT ? OFFSET ?";
+    $stmt = $pdo->prepare($paged_query);
+    foreach ($params as $index => $param) {
+        $stmt->bindValue($index + 1, $param);
+    }
+    $stmt->bindValue(count($params) + 1, $per_page, PDO::PARAM_INT);
+    $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
     $invoices = $stmt->fetchAll();
 } catch (PDOException $e) {
     if (strpos($e->getMessage(), 'invoices') !== false) {
@@ -1907,6 +1810,9 @@ try {
         throw $e;
     }
 }
+$party_name_maps = getPartyNameMaps($pdo, $invoices);
+$pagination_query = $_GET;
+$pagination_query['per_page'] = $per_page;
 ?>
 
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -2574,8 +2480,8 @@ try {
                                 <span class="badge-apple bg-primary-subtle text-primary"><?php echo htmlspecialchars($service_name); ?></span>
                             </td>
                             <td>
-                                <?php $cust_name = getPartyName($pdo, $inv); ?>
-                                <div class="fw-bold small"><?php echo $cust_name; ?></div>
+                                <?php $cust_name = getPartyName($pdo, $inv, $party_name_maps); ?>
+                                <div class="fw-bold small"><?php echo h($cust_name); ?></div>
                                 <?php if (!$is_purchase_only && $inv['sales_status'] == 'posted'):
                                     $s_total = round((float)$inv['sales_amount'] - (float)$inv['sales_discount'], 2);
                                     $s_received = round((float)$inv['sales_received'], 2);
@@ -2860,6 +2766,40 @@ try {
             </table>
         </div>
     </div>
+</div>
+
+<?php
+$pagination_url = function ($target_page) use ($pagination_query) {
+    $query = $pagination_query;
+    $query['page'] = $target_page;
+    return 'invoices.php?' . http_build_query($query);
+};
+$pager_start = max(1, $page - 2);
+$pager_end = min($total_pages, $page + 2);
+?>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-4" dir="rtl">
+    <div class="text-muted small">
+        إجمالي الفواتير: <?php echo h(number_format($total_invoices)); ?>
+        <span class="mx-1">·</span>
+        الصفحة <?php echo h($page); ?> من <?php echo h($total_pages); ?>
+    </div>
+    <?php if ($total_pages > 1): ?>
+        <nav aria-label="صفحات الفواتير">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="<?php echo h($pagination_url(max(1, $page - 1))); ?>">السابق</a>
+                </li>
+                <?php for ($pager_page = $pager_start; $pager_page <= $pager_end; $pager_page++): ?>
+                    <li class="page-item <?php echo $pager_page === $page ? 'active' : ''; ?>">
+                        <a class="page-link" href="<?php echo h($pagination_url($pager_page)); ?>"><?php echo h($pager_page); ?></a>
+                    </li>
+                <?php endfor; ?>
+                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="<?php echo h($pagination_url(min($total_pages, $page + 1))); ?>">التالي</a>
+                </li>
+            </ul>
+        </nav>
+    <?php endif; ?>
 </div>
 
 <!-- مودال تعديل الفاتورة -->

@@ -47,6 +47,46 @@ if (!function_exists('normalize_datetime_db')) {
     }
 }
 
+if (!function_exists('normalize_date_filter_boundary')) {
+    function normalize_date_filter_boundary($value, $end_of_day = false)
+    {
+        $value = trim((string)$value);
+        if ($value === '') {
+            return null;
+        }
+
+        $formats = ['!Y-m-d', '!Y-m-d H:i:s'];
+        foreach ($formats as $format) {
+            $date = DateTime::createFromFormat($format, $value);
+            $errors = DateTime::getLastErrors();
+            $has_errors = is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0);
+            if ($date !== false && !$has_errors) {
+                if ($format === '!Y-m-d') {
+                    return $date->format($end_of_day ? 'Y-m-d 23:59:59' : 'Y-m-d 00:00:00');
+                }
+
+                return $date->format('Y-m-d H:i:s');
+            }
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('normalize_date_filter_start')) {
+    function normalize_date_filter_start($value)
+    {
+        return normalize_date_filter_boundary($value);
+    }
+}
+
+if (!function_exists('normalize_date_filter_end')) {
+    function normalize_date_filter_end($value)
+    {
+        return normalize_date_filter_boundary($value, true);
+    }
+}
+
 if (!function_exists('format_datetime_local_value')) {
     function format_datetime_local_value($value)
     {
