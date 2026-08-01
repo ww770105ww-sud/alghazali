@@ -1532,12 +1532,18 @@ $where = "WHERE 1=1";
 $params = [];
 
 if (!empty($_GET['from_date'])) {
-    $where .= " AND i.invoice_date >= ?";
-    $params[] = normalize_date_filter_start($_GET['from_date']);
+    $from_date = normalize_date_filter_start($_GET['from_date']);
+    if ($from_date !== null) {
+        $where .= " AND i.invoice_date >= ?";
+        $params[] = $from_date;
+    }
 }
 if (!empty($_GET['to_date'])) {
-    $where .= " AND i.invoice_date <= ?";
-    $params[] = normalize_date_filter_end($_GET['to_date']);
+    $to_date = normalize_date_filter_end($_GET['to_date']);
+    if ($to_date !== null) {
+        $where .= " AND i.invoice_date <= ?";
+        $params[] = $to_date;
+    }
 }
 if (!empty($_GET['invoice_category'])) {
     $where .= " AND i.invoice_category = ?";
