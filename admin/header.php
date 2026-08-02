@@ -1,6 +1,15 @@
 <?php
 ob_start();
 define('SYSTEM_ACCESS', true);
+
+function render_access_gate(string $message, string $link = 'login.php'): void
+{
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+    }
+    echo '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>دخول لوحة التحكم</title><style>body{font-family:Arial,sans-serif;background:#f8fafc;color:#0f172a;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0} .box{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;max-width:420px;text-align:center;box-shadow:0 8px 24px rgba(15,23,42,0.08)} a{display:inline-block;margin-top:12px;padding:10px 16px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px}</style></head><body><div class="box"><h2>لوحة التحكم</h2><p>' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p><a href="' . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '">تسجيل الدخول</a></div></body></html>';
+}
+
 if (!headers_sent()) {
     header('Content-Type: text/html; charset=utf-8');
 }
@@ -10,8 +19,8 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/accounting_functions.php';
 require_once __DIR__ . '/../includes/system_error_audit.php';
 require_once __DIR__ . '/../includes/crm_functions.php';
-if (!isset($_SESSION['admin_id'])) {
-    header('Location: login.php');
+if (!isset($_SESSION['admin_id']) || empty($_SESSION['admin_id'])) {
+    render_access_gate('يجب تسجيل الدخول لعرض لوحة التحكم.', 'login.php');
     exit();
 }
 

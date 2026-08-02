@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ develop, main ]
+
+jobs:
+  php-lint:
+    name: PHP Lint & Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+
+      - name: Validate PHP syntax
+        run: |
+          echo "Checking PHP syntax..."
+          find . -type f -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l
+
+      - name: Composer install (if present)
+        run: |
+          if [ -f composer.json ]; then composer install --no-progress --no-suggest --prefer-dist; fi
+
+      - name: Run PHPUnit (if available)
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            if [ -f vendor/bin/phpunit ]; then
+              vendor/bin/phpunit --configuration phpunit.xml || (echo "PHPUnit failed" && exit 1)
+            else
+              echo "phpunit not installed; skipping tests" && exit 0
+            fi
+          else
+            echo "No phpunit.xml found; skipping tests"
+          fi

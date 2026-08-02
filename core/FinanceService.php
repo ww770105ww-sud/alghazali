@@ -1136,65 +1136,67 @@ class FinanceService
      */
     public function allocatePayment(int $voucherId, int $invoiceId, float $allocatedAmount): void
     {
-        // التحقق من الموجودية
-        if ($voucherId <= 0 || $invoiceId <= 0) {
-            throw new RuntimeException(
-                'FinanceService.allocatePayment: معرّفات السند والفاتورة مطلوبة وصحيحة. '
-                . "السند: {$voucherId}، الفاتورة: {$invoiceId}."
+        $this->executeAtomically(function () use ($voucherId, $invoiceId, $allocatedAmount) {
+            // التحقق من الموجودية
+            if ($voucherId <= 0 || $invoiceId <= 0) {
+                throw new RuntimeException(
+                    'FinanceService.allocatePayment: معرّفات السند والفاتورة مطلوبة وصحيحة. '
+                    . "السند: {$voucherId}، الفاتورة: {$invoiceId}."
+                );
+            }
+            if ($allocatedAmount <= 0) {
+                throw new RuntimeException(
+                    "FinanceService.allocatePayment: المبلغ المخصص يجب أن يكون أكبر من صفر. القيمة: {$allocatedAmount}."
+                );
+            }
+
+            // §3: منع التكرار — فحص ربط مسبق
+            if ($this->isAllocationDuplicate($voucherId, $invoiceId)) {
+                throw new RuntimeException(
+                    "FinanceService.allocatePayment: يوجد ربط مسبق بين السند {$voucherId} والفاتورة {$invoiceId}. "
+                    . 'تم منع تكرار توزيع المدفوعات على نفس الفاتورة.'
+                );
+            }
+
+            // §2: منع الدفع الزائد — قفل صف الفاتورة وتجميع التخصيصات لتجنب حالات التنافس.
+            $balance = $this->getInvoiceRemainingBalance($invoiceId, true);
+            $alreadyAllocated = $this->getAllocatedTotalForInvoice($invoiceId, true);
+            $remaining = $balance['remaining'];
+
+            if ($allocatedAmount > ($remaining + self::EPSILON)) {
+                throw new RuntimeException(
+                    "FinanceService.allocatePayment: المبلغ المخصص ({$allocatedAmount}) يتجاوز الرصيد المتبقي "
+                    . "للفاتورة {$invoiceId} والبالغ ({$remaining}). تم منع الدفع الزائد. "
+                    . "إجمالي الفاتورة: {$balance['total']}، المدفوع سابقاً: {$balance['paid']}."
+                );
+            }
+
+            // §3: منع تجاوز إجمالي المخصصات لقيمة الفاتورة
+            $totalAllocatedAfter = $alreadyAllocated + $allocatedAmount;
+            if ($totalAllocatedAfter > ($balance['total'] + self::EPSILON)) {
+                throw new RuntimeException(
+                    "FinanceService.allocatePayment: إجمالي المبالغ المخصصة ({$totalAllocatedAfter}) "
+                    . "يتجاوز قيمة الفاتورة {$invoiceId} ({$balance['total']}). تم منع تجاوز إجمالي الفاتورة."
+                );
+            }
+
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO payment_allocations (financial_transaction_id, invoice_id, allocated_amount)
+                 VALUES (?, ?, ?)'
             );
-        }
-        if ($allocatedAmount <= 0) {
-            throw new RuntimeException(
-                "FinanceService.allocatePayment: المبلغ المخصص يجب أن يكون أكبر من صفر. القيمة: {$allocatedAmount}."
-            );
-        }
+            $stmt->execute([$voucherId, $invoiceId, $allocatedAmount]);
 
-        // §3: منع التكرار — فحص ربط مسبق
-        if ($this->isAllocationDuplicate($voucherId, $invoiceId)) {
-            throw new RuntimeException(
-                "FinanceService.allocatePayment: يوجد ربط مسبق بين السند {$voucherId} والفاتورة {$invoiceId}. "
-                . 'تم منع تكرار توزيع المدفوعات على نفس الفاتورة.'
-            );
-        }
-
-        // §2: منع الدفع الزائد — قفل صف الفاتورة وتجميع التخصيصات لتجنب حالات التنافس.
-        $balance = $this->getInvoiceRemainingBalance($invoiceId, true);
-        $alreadyAllocated = $this->getAllocatedTotalForInvoice($invoiceId, true);
-        $remaining = $balance['remaining'];
-
-        if ($allocatedAmount > ($remaining + self::EPSILON)) {
-            throw new RuntimeException(
-                "FinanceService.allocatePayment: المبلغ المخصص ({$allocatedAmount}) يتجاوز الرصيد المتبقي "
-                . "للفاتورة {$invoiceId} والبالغ ({$remaining}). تم منع الدفع الزائد. "
-                . "إجمالي الفاتورة: {$balance['total']}، المدفوع سابقاً: {$balance['paid']}."
-            );
-        }
-
-        // §3: منع تجاوز إجمالي المخصصات لقيمة الفاتورة
-        $totalAllocatedAfter = $alreadyAllocated + $allocatedAmount;
-        if ($totalAllocatedAfter > ($balance['total'] + self::EPSILON)) {
-            throw new RuntimeException(
-                "FinanceService.allocatePayment: إجمالي المبالغ المخصصة ({$totalAllocatedAfter}) "
-                . "يتجاوز قيمة الفاتورة {$invoiceId} ({$balance['total']}). تم منع تجاوز إجمالي الفاتورة."
-            );
-        }
-
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO payment_allocations (financial_transaction_id, invoice_id, allocated_amount)
-             VALUES (?, ?, ?)'
-        );
-        $stmt->execute([$voucherId, $invoiceId, $allocatedAmount]);
-
-        // §6: سجل التدقيق لتوزيع الدفعة
-        $this->writeAuditLog('payment_allocation', 'payment_allocations', (int)$this->pdo->lastInsertId(), [
-            'operation' => 'allocate_payment',
-            'amount'    => $allocatedAmount,
-            'context'   => [
-                'voucher_id' => $voucherId,
-                'invoice_id' => $invoiceId,
-                'remaining_before' => $remaining,
-            ],
-        ]);
+            // §6: سجل التدقيق لتوزيع الدفعة
+            $this->writeAuditLog('payment_allocation', 'payment_allocations', (int)$this->pdo->lastInsertId(), [
+                'operation' => 'allocate_payment',
+                'amount'    => $allocatedAmount,
+                'context'   => [
+                    'voucher_id' => $voucherId,
+                    'invoice_id' => $invoiceId,
+                    'remaining_before' => $remaining,
+                ],
+            ]);
+        });
     }
 
     // ===================================================================

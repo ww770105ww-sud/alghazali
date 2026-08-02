@@ -1,0 +1,9 @@
+# Code owners for Alghazali
+
+# Default owner for all files
+* @ww770105ww-sud
+
+# Ownership for key areas
+/admin/ @ww770105ww-sud
+/core/ @ww770105ww-sud
+/includes/ @ww770105ww-sud
