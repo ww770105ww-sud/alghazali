@@ -1,3 +1,15 @@
+vendor/
+composer.lock
+.env
+.env.local
+.idea/
+.vscode/
+node_modules/
+uploads/
+sessions/
+cache/
+*.log
+*.sql
 # Session files - should never be committed
 sessions/*
 !sessions/.htaccess
