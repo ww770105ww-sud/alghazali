@@ -17,7 +17,12 @@ class ServiceFinancialEngine {
      */
     public function __construct(PDO $pdo, ?int $user_id = null) {
         $this->pdo = $pdo;
-        $this->user_id = $user_id ?: ($_SESSION['admin_id'] ?? 1);
+        $this->user_id = $user_id ?? ($_SESSION['admin_id'] ?? null);
+        if ($this->user_id === null) {
+            throw new RuntimeException(
+                'ServiceFinancialEngine: تعذّر تحديد معرف المستخدم. يجب تمرير user_id صالح أو تسجيل الدخول.'
+            );
+        }
     }
 
     /**

@@ -781,12 +781,14 @@ class FinanceService
      * @param int $invoiceId معرّف الفاتورة
      * @return array{total: float, paid: float, remaining: float}
      */
-    private function getInvoiceRemainingBalance(int $invoiceId): array
+    private function getInvoiceRemainingBalance(int $invoiceId, bool $forUpdate = false): array
     {
-        $stmt = $this->pdo->prepare(
-            'SELECT total_amount, discount, tax_amount, amount_received
-             FROM invoices WHERE id = ? LIMIT 1'
-        );
+        $sql = 'SELECT total_amount, discount, tax_amount, amount_received
+             FROM invoices WHERE id = ? LIMIT 1';
+        if ($forUpdate) {
+            $sql .= ' FOR UPDATE';
+        }
+        $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$invoiceId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
@@ -807,11 +809,13 @@ class FinanceService
     /**
      * حساب إجمالي المبالغ المخصصة مسبقاً لفاتورة عبر payment_allocations.
      */
-    private function getAllocatedTotalForInvoice(int $invoiceId): float
+    private function getAllocatedTotalForInvoice(int $invoiceId, bool $forUpdate = false): float
     {
-        $stmt = $this->pdo->prepare(
-            'SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE invoice_id = ?'
-        );
+        $sql = 'SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE invoice_id = ?';
+        if ($forUpdate) {
+            $sql .= ' FOR UPDATE';
+        }
+        $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$invoiceId]);
         return (float)$stmt->fetchColumn();
     }
@@ -1153,9 +1157,9 @@ class FinanceService
             );
         }
 
-        // §2: منع الدفع الزائد — حساب الرصيد المتبقي
-        $balance = $this->getInvoiceRemainingBalance($invoiceId);
-        $alreadyAllocated = $this->getAllocatedTotalForInvoice($invoiceId);
+        // §2: منع الدفع الزائد — قفل صف الفاتورة وتجميع التخصيصات لتجنب حالات التنافس.
+        $balance = $this->getInvoiceRemainingBalance($invoiceId, true);
+        $alreadyAllocated = $this->getAllocatedTotalForInvoice($invoiceId, true);
         $remaining = $balance['remaining'];
 
         if ($allocatedAmount > ($remaining + self::EPSILON)) {
